@@ -2,30 +2,34 @@
 
 **Reference-based quality assurance for processed images and videos.**
 
-Visual Verifier compares original media with a processed candidate and
-returns deterministic PASS/FAIL results, measurements, and reviewable
-evidence. It is a checker, not an image or video processor.
+Visual Verifier compares original media with a processed candidate and returns
+deterministic PASS/FAIL results, measurements, annotated evidence, and
+machine-readable reports. It verifies processing; it does not perform the
+processing itself.
 
-## Current status
+## Current release
 
-Visual Verifier is a pre-alpha package at version `0.1.0a0`. The active
-implementation currently supports:
+Version `0.2.0a0` is the V5.2 pre-alpha milestone: **Temporal Tracking and
+Integrity Intelligence**.
+
+The active package supports:
 
 - Image-to-image verification
 - Synchronized video frame comparison
 - Multiple changed-region detection
 - Region filtering and severity scoring
-- Annotated image and video evidence
-- CSV and JSON reports
-- A typed Python API
-- A command-line interface suitable for CI
-- A fixed three-video regression fixture
+- Deterministic IoU-based temporal association
+- Tentative, confirmed, lost, recovered, and closed track lifecycles
+- Configurable short-gap tolerance
+- Split and merge lineage evidence
+- Track continuity, fragmentation, stability, and recovery metrics
+- Persistent track labels in annotated video
+- Frame, region, track, observation, event, and JSON reports
+- Typed Python and command-line interfaces
+- Linux and Windows CI
 
-The active package does **not** yet provide selectable policy objects,
-temporal tracking, target CSV validation, automatic target detection,
-batch execution, alignment, or a pytest plugin. Historical versions of
-some of those capabilities are preserved under `archive/legacy_cells/`
-for future extraction and validation.
+Tracking is evidence-only in V5.2. It does not silently change the established
+frame-level verification policy.
 
 ## Verification contract
 
@@ -33,142 +37,87 @@ for future extraction and validation.
 Reference media
 + Candidate processed media
 + Detection configuration
-= PASS/FAIL + measurements + evidence
++ Optional tracking configuration
+= PASS/FAIL + measurements + temporal evidence
 ```
 
-The current image rule passes when at least one accepted changed region is
-detected, unless processing is explicitly optional.
+With processing required on every frame:
 
-The current video rule passes when every synchronized frame contains at
-least one accepted changed region, unless unprocessed frames are explicitly
-allowed.
+- `PASS`: every synchronized frame contains an accepted changed region.
+- `FAIL`: one or more frames contain no accepted changed region.
 
-These rules are intentionally generic. They do not prove that a specific
-face, licence plate, or private object was anonymized.
+The bundled regression fixture remains:
 
-## Installation with uv
+| Comparison | Status | Failed frames |
+| --- | --- | --- |
+| Raw vs. fully blurred | `PASS` | None |
+| Raw vs. partially blurred | `FAIL` | `4, 8, 12` |
+
+## Installation
 
 Requirements:
 
 - Python 3.10 or newer
 - `uv`
 
-On Windows PowerShell:
-
 ```powershell
-git clone <repository-url>
-Set-Location visual-verifier
-
 Set-ExecutionPolicy `
     -Scope Process `
     -ExecutionPolicy Bypass `
     -Force
 
-Unblock-File .\scripts\bootstrap_uv.ps1
-.\scripts\bootstrap_uv.ps1
+Unblock-File .\scriptsootstrap_uv.ps1
+.\scriptsootstrap_uv.ps1
 ```
-
-The bootstrap script installs or selects Python 3.12, synchronizes the
-environment, checks dependencies, formats the repository, runs Ruff and
-Mypy, and executes the test suite.
 
 ## Python API
 
-### Verify an image
-
-```python
-from visual_verifier import verify_image
-
-result = verify_image(
-    reference="reference.png",
-    candidate="processed.png",
-    output_dir="outputs/image_check",
-)
-
-print(result.status.value)
-print(result.measurements)
-result.raise_for_failure()
-```
-
-### Verify a video
-
 ```python
 from visual_verifier import verify_video
+from visual_verifier.config import TrackingConfig
 
 result = verify_video(
     reference="examples/media/video_raw.mp4",
     candidate="examples/media/video_blur_partial.mp4",
-    output_dir="outputs/video_check",
+    output_dir="outputs/partial_check",
+    tracking_config=TrackingConfig(
+        association_iou_threshold=0.20,
+        minimum_confirmation_hits=2,
+        maximum_gap_frames=3,
+        lineage_overlap_threshold=0.20,
+    ),
 )
 
 print(result.status.value)
 print(result.failed_frames)
+print(result.measurements["tracking"])
 ```
 
-To permit frames without detected processing:
+Disable tracking while preserving frame-level verification:
 
 ```python
 result = verify_video(
     reference="reference.mp4",
     candidate="candidate.mp4",
-    output_dir="outputs/video_check",
-    expect_processing_every_frame=False,
-)
-```
-
-### Configure detection thresholds
-
-```python
-from visual_verifier import verify_image
-from visual_verifier.config import DetectionConfig
-
-config = DetectionConfig(
-    diff_threshold=30,
-    min_box_area=80,
-    min_changed_ratio=0.03,
-    min_mean_diff=5.0,
-    min_severity_score=8.0,
-)
-
-result = verify_image(
-    reference="reference.png",
-    candidate="candidate.png",
-    config=config,
+    enable_tracking=False,
 )
 ```
 
 ## Command-line interface
 
-Check the environment:
-
-```powershell
-uv run visual-verifier doctor
-```
-
-Inspect media metadata:
-
-```powershell
-uv run visual-verifier inspect `
-    examples\media\video_raw.mp4
-```
-
-Verify an image:
-
-```powershell
-uv run visual-verifier image `
-    --reference reference.png `
-    --candidate processed.png `
-    --output outputs\image_check
-```
-
-Verify a video:
-
 ```powershell
 uv run visual-verifier video `
-    --reference examples\media\video_raw.mp4 `
-    --candidate examples\media\video_blur_partial.mp4 `
-    --output outputs\video_check
+    --reference examples\mediaideo_raw.mp4 `
+    --candidate examples\mediaideo_blur_partial.mp4 `
+    --output outputs\partial_check `
+    --tracking-iou 0.20 `
+    --tracking-confirmation-hits 2 `
+    --tracking-max-gap 3 `
+    --lineage-overlap 0.20
 ```
+
+Use `--no-tracking` to omit temporal analysis and `--no-lineage-events` to
+retain tracking without split/merge evidence.
 
 CLI exit codes:
 
@@ -180,92 +129,70 @@ CLI exit codes:
 
 ## Evidence outputs
 
-Image verification can write:
-
-```text
-annotated_image.png
-region_report.csv
-summary.json
-```
-
-Video verification can write:
+Video verification with tracking enabled can write:
 
 ```text
 annotated_video.mp4
 frame_report.csv
 region_report.csv
 rejected_region_report.csv
+track_report.csv
+track_observation_report.csv
+track_event_report.csv
 summary.json
 ```
 
-See `docs/output_schema.md` for the field-level contract.
+The primary temporal measures include:
 
-## Regression fixture
+- Continuity ratio
+- Fragmentation index
+- Missing frames and longest gap
+- Mean and minimum association IoU
+- Center jitter
+- Area stability
+- Recovery count
+- Split and merge involvement
 
-The repository includes three 15-frame example videos:
+See `docs/temporal_tracking.md` and `docs/output_schema.md`.
 
-```text
-examples/media/video_raw.mp4
-examples/media/video_blur.mp4
-examples/media/video_blur_partial.mp4
+## Development and validation
+
+```powershell
+.\scriptsalidate_v5_2.ps1
 ```
 
-Expected results:
-
-| Comparison | Expected status | Failed frames |
-| --- | --- | --- |
-| Raw vs. fully blurred | `PASS` | None |
-| Raw vs. partially blurred | `FAIL` | `4, 8, 12` |
+The V5.2 gate checks formatting, linting, typing, all tests, the exact video
+regressions, temporal report generation, CLI health, and package building.
 
 ## Repository layout
 
 ```text
 src/visual_verifier/     Active package
-tests/                   Unit and regression tests
-examples/                Reproducible media fixtures
+src/visual_verifier/tracking/
+                         Temporal association and integrity analysis
+tests/                   Unit and end-to-end regressions
+examples/media/          Reproducible 15-frame fixtures
 docs/                    Architecture and behavior documentation
-scripts/                 Bootstrap, quality, cleanup, release checks
+scripts/                 Bootstrap, quality, cleanup, and release gates
 archive/legacy_cells/    Read-only historical prototypes
 ```
 
-`archive/legacy_cells/` is not imported by the active package and must not
-be edited during normal development.
+## Limitations
 
-## Development checks
+A tracking ID represents a persistent changed region, not a proven face,
+licence plate, person, or other semantic object. V5.2 assumes synchronized
+media and does not perform motion prediction, appearance re-identification,
+camera-motion compensation, or automatic temporal alignment.
 
-```powershell
-.\scripts\run_quality.ps1
-```
-
-Equivalent commands:
-
-```powershell
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy src --python-version 3.12
-uv run pytest -q
-```
-
-## Limitations and safety
-
-Visual Verifier is an engineering QA tool. It is not a regulatory
-certification system, a guaranteed anonymization detector, or a substitute
-for human review in high-risk privacy or safety workflows.
-
-Read:
-
-- `docs/limitations.md`
-- `docs/verification_contract.md`
-- `SECURITY.md`
+Visual Verifier is an engineering QA tool, not a regulatory certificate or a
+guarantee of anonymization.
 
 ## Roadmap
 
-The next major work is validated extraction of temporal tracking,
-target-aware verification, selectable policies, and batch execution from
-the historical prototypes. See `ROADMAP.md`.
+V5.3 will add reviewed target-aware verification and target continuity while
+preserving V5.2 as the stable generic temporal layer. See `ROADMAP.md`.
 
 ## Licence and citation
 
-Visual Verifier is licensed under the Apache License 2.0.
-
-Citation metadata is available in `CITATION.cff`.
+Visual Verifier is licensed under Apache-2.0. Citation metadata is provided in
+`CITATION.cff`.

@@ -1,10 +1,14 @@
-"""Draw human-readable verification evidence on image and video frames."""
+"""Draw human-readable verification and temporal tracking evidence."""
 
 from __future__ import annotations
 
 import cv2
 
 from visual_verifier.models import RegionMeasurement, VerificationStatus
+from visual_verifier.tracking.models import (
+    TrackLifecycleState,
+    TrackObservation,
+)
 from visual_verifier.type_aliases import ImageArray
 
 REGION_COLOR_BGR = (0, 255, 0)
@@ -29,8 +33,9 @@ def annotate_frame(
     total_frames: int,
     regions: tuple[RegionMeasurement, ...],
     status: VerificationStatus,
+    tracking_observations: tuple[TrackObservation, ...] = (),
 ) -> ImageArray:
-    """Return a frame annotated with region and verification evidence.
+    """Return a frame annotated with verification and tracking evidence.
 
     Args:
         frame: Candidate image or video frame to annotate.
@@ -38,13 +43,22 @@ def annotate_frame(
         total_frames: Total number of frames shown in the header.
         regions: Accepted regions to draw on the frame.
         status: Verification outcome shown in the header.
+        tracking_observations: Optional track identity for each region.
 
     Returns:
         Independent annotated copy of the supplied frame.
     """
 
     annotated_frame_ndarray = frame.copy()
-    _draw_region_annotations(annotated_frame_ndarray, regions)
+    observation_lookup_dict = {
+        observation_obj.detection_index: observation_obj
+        for observation_obj in tracking_observations
+    }
+    _draw_region_annotations(
+        annotated_frame_ndarray,
+        regions,
+        observation_lookup_dict,
+    )
     _draw_header(
         annotated_frame_ndarray,
         frame_number,
@@ -58,89 +72,60 @@ def annotate_frame(
 def _draw_region_annotations(
     annotated_frame_ndarray: ImageArray,
     regions_tuple: tuple[RegionMeasurement, ...],
+    observation_lookup_dict: dict[int, TrackObservation],
 ) -> None:
-    """Draw every accepted region and its severity label in place.
+    """Draw every accepted region and optional track label in place."""
 
-    Args:
-        annotated_frame_ndarray: Writable frame receiving annotations.
-        regions_tuple: Ordered region measurements to draw.
-
-    Returns:
-        None. The supplied frame is modified in place.
-    """
-
-    for region_index_int, region_obj in enumerate(
-        regions_tuple,
-        start=1,
-    ):
+    for detection_index_int, region_obj in enumerate(regions_tuple):
         _draw_region(
             annotated_frame_ndarray,
-            region_index_int,
+            detection_index_int,
             region_obj,
+            observation_lookup_dict.get(detection_index_int),
         )
 
 
 def _draw_region(
     annotated_frame_ndarray: ImageArray,
-    region_index_int: int,
+    detection_index_int: int,
     region_obj: RegionMeasurement,
+    observation_obj: TrackObservation | None,
 ) -> None:
-    """Draw one region boundary and severity label in place.
-
-    Args:
-        annotated_frame_ndarray: Writable frame receiving annotations.
-        region_index_int: One-based display index for the region.
-        region_obj: Region geometry and severity measurements.
-
-    Returns:
-        None. The supplied frame is modified in place.
-    """
+    """Draw one region boundary and evidence label in place."""
 
     bounding_box_obj = region_obj.box
-    top_left_point_tuple = (
-        bounding_box_obj.x1,
-        bounding_box_obj.y1,
-    )
-    bottom_right_point_tuple = (
-        bounding_box_obj.x2,
-        bounding_box_obj.y2,
-    )
     cv2.rectangle(
         annotated_frame_ndarray,
-        top_left_point_tuple,
-        bottom_right_point_tuple,
+        (bounding_box_obj.x1, bounding_box_obj.y1),
+        (bounding_box_obj.x2, bounding_box_obj.y2),
         REGION_COLOR_BGR,
         REGION_BORDER_THICKNESS_INT,
     )
     _draw_region_label(
         annotated_frame_ndarray,
-        region_index_int,
+        detection_index_int,
         region_obj,
+        observation_obj,
     )
 
 
 def _draw_region_label(
     annotated_frame_ndarray: ImageArray,
-    region_index_int: int,
+    detection_index_int: int,
     region_obj: RegionMeasurement,
+    observation_obj: TrackObservation | None,
 ) -> None:
-    """Draw one region severity label above its bounding box.
+    """Draw one compact region or track label above its box."""
 
-    Args:
-        annotated_frame_ndarray: Writable frame receiving annotations.
-        region_index_int: One-based display index for the region.
-        region_obj: Region geometry and severity measurements.
-
-    Returns:
-        None. The supplied frame is modified in place.
-    """
-
-    label_text_str = _build_region_label(region_index_int, region_obj)
-    label_origin_tuple = _calculate_region_label_origin(region_obj)
+    label_text_str = _build_region_label(
+        detection_index_int,
+        region_obj,
+        observation_obj,
+    )
     cv2.putText(
         annotated_frame_ndarray,
         label_text_str,
-        label_origin_tuple,
+        _calculate_region_label_origin(region_obj),
         TEXT_FONT_INT,
         REGION_TEXT_SCALE_FLOAT,
         REGION_COLOR_BGR,
@@ -150,36 +135,28 @@ def _draw_region_label(
 
 
 def _build_region_label(
-    region_index_int: int,
+    detection_index_int: int,
     region_obj: RegionMeasurement,
+    observation_obj: TrackObservation | None,
 ) -> str:
-    """Build the compact label displayed for one region.
+    """Build a track-aware label while preserving image-only fallback."""
 
-    Args:
-        region_index_int: One-based display index for the region.
-        region_obj: Region severity measurements.
-
-    Returns:
-        Region index, numerical severity, and severity category.
-    """
-
-    return (
-        f"R{region_index_int} S:{region_obj.severity_score} "
-        f"{region_obj.severity_label}"
+    severity_text_str = (
+        f"{region_obj.severity_label} | {region_obj.severity_score:.1f}"
     )
+    if observation_obj is None:
+        return f"R{detection_index_int + 1} | {severity_text_str}"
+
+    track_label_str = observation_obj.track_label
+    if observation_obj.lifecycle_state == TrackLifecycleState.TENTATIVE:
+        track_label_str = f"{track_label_str}?"
+    return f"{track_label_str} | {severity_text_str}"
 
 
 def _calculate_region_label_origin(
     region_obj: RegionMeasurement,
 ) -> tuple[int, int]:
-    """Calculate the top-left text origin for a region label.
-
-    Args:
-        region_obj: Region whose box anchors the label.
-
-    Returns:
-        Pixel coordinates for OpenCV text drawing.
-    """
+    """Calculate the top-left text origin for a region label."""
 
     bounding_box_obj = region_obj.box
     label_y_int = max(
@@ -196,18 +173,7 @@ def _draw_header(
     region_count_int: int,
     status_enum: VerificationStatus,
 ) -> None:
-    """Draw frame-level verification evidence in place.
-
-    Args:
-        annotated_frame_ndarray: Writable frame receiving the header.
-        frame_number_int: One-based frame number.
-        total_frames_int: Total number of frames.
-        region_count_int: Number of accepted regions drawn.
-        status_enum: Frame or image verification outcome.
-
-    Returns:
-        None. The supplied frame is modified in place.
-    """
+    """Draw frame-level verification evidence in place."""
 
     header_text_str = _build_header_text(
         frame_number_int,
@@ -215,14 +181,13 @@ def _draw_header(
         region_count_int,
         status_enum,
     )
-    header_color_tuple = _select_header_color(status_enum)
     cv2.putText(
         annotated_frame_ndarray,
         header_text_str,
         HEADER_TEXT_ORIGIN,
         TEXT_FONT_INT,
         HEADER_TEXT_SCALE_FLOAT,
-        header_color_tuple,
+        _select_header_color(status_enum),
         HEADER_TEXT_THICKNESS_INT,
         TEXT_LINE_TYPE_INT,
     )
@@ -234,17 +199,7 @@ def _build_header_text(
     region_count_int: int,
     status_enum: VerificationStatus,
 ) -> str:
-    """Build the frame-level annotation header.
-
-    Args:
-        frame_number_int: One-based frame number.
-        total_frames_int: Total number of frames.
-        region_count_int: Number of accepted regions drawn.
-        status_enum: Frame or image verification outcome.
-
-    Returns:
-        Formatted frame, region-count, and status text.
-    """
+    """Build the frame-level annotation header."""
 
     return (
         f"Frame {frame_number_int}/{total_frames_int} | "
@@ -255,14 +210,7 @@ def _build_header_text(
 def _select_header_color(
     status_enum: VerificationStatus,
 ) -> tuple[int, int, int]:
-    """Select the BGR header color for a verification outcome.
-
-    Args:
-        status_enum: Frame or image verification outcome.
-
-    Returns:
-        Yellow for pass, otherwise red, preserving legacy behaviour.
-    """
+    """Select the BGR header color for a verification outcome."""
 
     if status_enum == VerificationStatus.PASS:
         return PASS_HEADER_COLOR_BGR

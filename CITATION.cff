@@ -2,14 +2,15 @@ cff-version: 1.2.0
 message: "Please cite Visual Verifier when using it in research."
 title: "Visual Verifier"
 type: software
-version: 0.1.0a0
-date-released: 2026-07-20
+version: 0.2.0a0
+date-released: 2026-07-21
 license: Apache-2.0
 authors:
   - family-names: "Dash"
     given-names: "Sambit Supriya"
 keywords:
   - computer vision
+  - temporal tracking
   - image processing
   - video processing
   - quality assurance

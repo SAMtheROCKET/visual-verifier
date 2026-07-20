@@ -11,7 +11,7 @@ from typing import Final
 from visual_verifier.api import verify_image, verify_video
 from visual_verifier.models import VerificationResult, VerificationStatus
 
-__version__: Final[str] = "0.1.0a0"
+__version__: Final[str] = "0.2.0a0"
 
 __all__ = [
     "VerificationResult",
