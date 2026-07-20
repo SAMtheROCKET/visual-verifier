@@ -24,6 +24,9 @@ EXPECTED_REPORT_NAMES_FROZENSET = frozenset(
         "region_report",
         "rejected_region_report",
         "summary_json",
+        "track_report",
+        "track_observation_report",
+        "track_event_report",
     }
 )
 

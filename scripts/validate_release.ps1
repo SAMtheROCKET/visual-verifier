@@ -14,7 +14,12 @@ $REQUIRED_WHEEL_PATHS = @(
     "visual_verifier/__init__.py",
     "visual_verifier/api.py",
     "visual_verifier/cli.py",
-    "visual_verifier/py.typed"
+    "visual_verifier/py.typed",
+    "visual_verifier/tracking/association.py",
+    "visual_verifier/tracking/tracker.py",
+    "visual_verifier/tracking/analysis.py",
+    "visual_verifier/tracking/events.py",
+    "visual_verifier/reporting/track_report.py"
 )
 
 $FORBIDDEN_WHEEL_FRAGMENTS = @(
@@ -43,9 +48,6 @@ function Assert-CommandSucceeded {
     <#
     .SYNOPSIS
     Raises an error when the previous native command failed.
-
-    .PARAMETER CommandName
-    Human-readable command name included in the error.
     #>
 
     param(
@@ -65,9 +67,6 @@ function Assert-WheelContents {
     <#
     .SYNOPSIS
     Confirms required wheel files and rejects forbidden paths.
-
-    .PARAMETER WheelFile
-    Built wheel file to inspect.
     #>
 
     param(
@@ -85,18 +84,15 @@ function Assert-WheelContents {
             $archive_obj.Entries |
                 ForEach-Object { $_.FullName }
         )
-
         foreach ($required_path_str in $REQUIRED_WHEEL_PATHS) {
             if ($required_path_str -notin $entry_names_list) {
                 throw "Wheel is missing $required_path_str"
             }
         }
-
         foreach ($fragment_str in $FORBIDDEN_WHEEL_FRAGMENTS) {
             $invalid_entry_obj = $entry_names_list |
                 Where-Object { $_ -like "*$fragment_str*" } |
                 Select-Object -First 1
-
             if ($null -ne $invalid_entry_obj) {
                 throw (
                     "Wheel contains forbidden path " +

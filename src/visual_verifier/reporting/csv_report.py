@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import pandas as pd
@@ -16,42 +17,34 @@ CSV_INCLUDE_INDEX_BOOL = False
 def write_csv_report(
     report_rows_list: list[ReportRow],
     output_path_input: PathInput,
+    *,
+    column_names: Sequence[str] | None = None,
 ) -> Path:
     """Write ordered report rows to a CSV file.
 
     Args:
         report_rows_list: Report rows in the required output order.
         output_path_input: Destination path for the CSV report.
+        column_names: Optional stable schema used when rows are empty.
 
     Returns:
         Path to the generated CSV report.
 
     Raises:
         ReportWriteError: If the destination cannot be prepared or written.
-
-    Warning:
-        Column order follows the dictionaries supplied by the report builder.
-        Callers should therefore construct rows with a stable key order.
     """
 
     output_path_obj = _prepare_output_path(output_path_input)
-    report_dataframe_obj = _build_report_dataframe(report_rows_list)
+    report_dataframe_obj = _build_report_dataframe(
+        report_rows_list,
+        column_names,
+    )
     _write_report_dataframe(report_dataframe_obj, output_path_obj)
     return output_path_obj
 
 
 def _prepare_output_path(output_path_input: PathInput) -> Path:
-    """Create the destination directory for a CSV report.
-
-    Args:
-        output_path_input: User-provided destination path.
-
-    Returns:
-        Expanded destination path.
-
-    Raises:
-        ReportWriteError: If the parent directory cannot be created.
-    """
+    """Create the destination directory for a CSV report."""
 
     output_path_obj = Path(output_path_input).expanduser()
     try:
@@ -69,32 +62,20 @@ def _prepare_output_path(output_path_input: PathInput) -> Path:
 
 def _build_report_dataframe(
     report_rows_list: list[ReportRow],
+    column_names: Sequence[str] | None,
 ) -> pd.DataFrame:
-    """Build a dataframe without changing row or column order.
+    """Build a dataframe without changing row or column order."""
 
-    Args:
-        report_rows_list: Ordered dictionaries containing report values.
-
-    Returns:
-        Dataframe ready for CSV serialization.
-    """
-
-    return pd.DataFrame(report_rows_list)
+    if column_names is None:
+        return pd.DataFrame(report_rows_list)
+    return pd.DataFrame(report_rows_list, columns=list(column_names))
 
 
 def _write_report_dataframe(
     report_dataframe_obj: pd.DataFrame,
     output_path_obj: Path,
 ) -> None:
-    """Serialize a dataframe using the repository CSV convention.
-
-    Args:
-        report_dataframe_obj: Dataframe containing report evidence.
-        output_path_obj: Destination path for the CSV report.
-
-    Raises:
-        ReportWriteError: If pandas cannot serialize or write the report.
-    """
+    """Serialize a dataframe using the repository CSV convention."""
 
     try:
         report_dataframe_obj.to_csv(

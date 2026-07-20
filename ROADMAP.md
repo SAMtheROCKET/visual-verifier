@@ -1,89 +1,56 @@
 # Visual Verifier Roadmap
 
-This roadmap separates implemented behavior from planned extraction of
-historical prototype capabilities.
+## V5.1b / 0.1.0a0 — complete
 
-## V5.1b foundation — complete
+- Modular typed foundation
+- Image and synchronized-video verification
+- Region metrics, filtering, annotations, reports, CLI, and CI
 
-- Modular package under `src/visual_verifier/`
-- Typed image and video APIs
-- Synchronized video-frame reading
-- Pixel, sharpness, and geometry metrics
-- Changed-region extraction
-- Severity scoring and region filtering
-- Image and video evidence generation
-- CSV and JSON reports
-- CLI commands and CI-compatible exit codes
-- PowerShell bootstrap and quality gates
-- Package typing support
-- Three-video regression suite
+## V5.2 / 0.2.0a0 — complete
 
-## V5.2 temporal parity
+- Deterministic IoU association
+- Explicit track lifecycle and short-gap recovery
+- Track IDs and temporal annotations
+- Continuity, fragmentation, jitter, and stability metrics
+- Split and merge lineage evidence
+- Track, observation, and event reports
+- Temporal unit and video regressions
 
-Goal: restore V2.1 temporal behavior as tested package modules.
+## V5.3 — target-aware temporal verification
 
-- IoU-based region identity tracking
-- Track lifecycle and gap handling
-- Track confidence metrics
-- Track report schema
-- Temporal false-positive suppression
-- Regression tests against historical outputs
+- Reviewed target CSV schema
+- Target validation and coordinate checks
+- Missing-frame interpolation with explicit provenance
+- Target-to-processing coverage
+- Target continuity and per-target failures
+- Review overlays and target reports
 
-## V5.3 target-aware parity
-
-Goal: restore V3.0–V3.2 behavior without notebook dependencies.
-
-- Reviewed target CSV loader
-- Target schema validation
-- Missing-frame interpolation
-- Target-to-region coverage calculation
-- Target-level PASS/FAIL decisions
-- Manual review overlay
-- Target report schema and tests
-
-## V5.4 policy system
+## V5.4 — selectable policy system
 
 - Typed policy protocol
 - Generic-change policy
-- Privacy-blur policy
-- Policy configuration serialization
-- Independent policy tests
-- Stable policy selection through API and CLI
+- Privacy-processing policy
+- Explicit temporal continuity policy
+- Stable policy configuration and serialization
 
-## V5.5 batch and integration layer
+## V5.5 — batch and integration layer
 
-- Batch directory and manifest execution
+- Batch manifests and directory execution
 - Aggregate summaries
 - Optional pytest assertions
-- CI report artifacts
-- Parallel execution with deterministic ordering
+- Parallel deterministic execution
 
-## V5.6 robustness
+## V5.6 — robustness and calibration
 
-- Frame-count and FPS mismatch diagnostics
-- Temporal alignment options
-- Resolution and color-space mismatch reporting
+- Frame-count, FPS, and resolution mismatch diagnostics
+- Temporal alignment and resampling options
 - Corrupted-media handling
-- Performance and memory benchmarks
+- Performance benchmarks and public threshold calibration
 
 ## V6.0 public beta criteria
 
 - Public benchmark dataset
-- Calibrated default thresholds
-- Documented false-positive and false-negative rates
 - Stable output schema
-- Cross-platform release testing
+- Documented error rates
+- Cross-platform release validation
 - PyPI distribution
-- Migration and compatibility policy
-
-## Long-term research
-
-- Optional object detectors and segmenters
-- Transformation-specific quality models
-- Watermark and blackout verification
-- Human-review workflows
-- HTML evidence reports
-- Dataset and model-provider integrations
-
-Planned features are not part of the current public contract until they are
-implemented, tested, documented, and exported.

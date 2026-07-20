@@ -9,11 +9,12 @@ public API / CLI
 image and video pipelines
         |
         +--> media readers and normalization
-        +--> region detection
-        |       +--> geometry metrics
-        |       +--> pixel metrics
-        |       +--> sharpness metrics
-        |       +--> severity and filtering
+        +--> region detection and measurements
+        +--> temporal tracking session
+        |       +--> deterministic association
+        |       +--> lifecycle state
+        |       +--> lineage events
+        |       +--> integrity analysis
         |
         +--> annotations and report writers
         |
@@ -21,45 +22,31 @@ image and video pipelines
 immutable domain models and structured exceptions
 ```
 
-Lower-level modules do not import the API or CLI.
+## Tracking boundary
 
-## Main packages
+`tracking/association.py`
+: Stateless one-to-one IoU association.
 
-`api.py`
-: Stable one-call Python functions.
+`tracking/tracker.py`
+: The only mutable temporal lifecycle owner.
 
-`cli.py`
-: Command parsing, JSON output, and exit-code conversion.
+`tracking/events.py`
+: Stateless split and merge candidate detection.
 
-`models.py`
-: Immutable status, metadata, configuration, measurement, frame, failure,
-  and result objects.
+`tracking/analysis.py`
+: Stateless completed-track metrics.
 
-`media/`
-: Metadata reading, image-size normalization, and synchronized video pairs.
+`tracking/models.py`
+: Immutable observations, states, events, frame results, and summaries.
 
-`metrics/`
-: Stateless geometry, pixel-difference, and sharpness calculations.
+Mutable tracker internals never escape into reports or public APIs. The video
+pipeline receives immutable frame tracking results and completed summaries.
 
-`detection/`
-: Contour extraction, severity scoring, and region acceptance.
+## Compatibility design
 
-`pipeline/`
-: Image and video orchestration.
+Temporal tracking is enabled by default for video verification but remains
+non-decisional in V5.2. Disabling it removes temporal reports without changing
+frame-level PASS/FAIL outcomes.
 
-`reporting/`
-: Annotated evidence and CSV/JSON serialization.
-
-## Design choices
-
-- Pure functions are used for stateless mathematical operations.
-- Classes own lifecycle state such as video captures and video writers.
-- Results are immutable dataclasses.
-- Public APIs accept natural argument names.
-- Internal variables use descriptive names and type-oriented suffixes.
-- Historical scripts are never runtime dependencies.
-
-## Future extension points
-
-The empty `policies`, `targets`, `tracking`, and `integrations` namespaces
-reserve future package locations. No implementation is public until tested.
+Historical scripts under `archive/legacy_cells/` remain read-only and are not
+runtime dependencies.

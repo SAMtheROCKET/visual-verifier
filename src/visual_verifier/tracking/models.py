@@ -246,6 +246,71 @@ class TrackEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class TrackSummary:
+    """Store completed temporal integrity metrics for one track."""
+
+    track_id: int
+    final_state: TrackLifecycleState
+    first_frame: int
+    last_frame: int
+    observation_count: int
+    confirmed: bool
+    active_span_frames: int
+    missing_frames: tuple[int, ...]
+    gap_count: int
+    longest_gap_frames: int
+    continuity_ratio: float
+    fragmentation_index: float
+    mean_association_iou: float
+    minimum_association_iou: float
+    mean_severity_score: float
+    maximum_severity_score: float
+    mean_changed_ratio: float
+    mean_area_px: float
+    center_jitter_px: float
+    area_stability_ratio: float
+    recovery_count: int
+    split_event_count: int
+    merge_event_count: int
+
+    @property
+    def track_label(self) -> str:
+        """Return the zero-padded display label for this track."""
+
+        return format_track_label(self.track_id)
+
+    def to_dict(self) -> dict[str, object]:
+        """Return serializable temporal integrity measurements."""
+
+        return {
+            "track_id": self.track_id,
+            "track_label": self.track_label,
+            "final_state": self.final_state.value,
+            "first_frame": self.first_frame,
+            "last_frame": self.last_frame,
+            "observation_count": self.observation_count,
+            "confirmed": self.confirmed,
+            "active_span_frames": self.active_span_frames,
+            "missing_frames": list(self.missing_frames),
+            "gap_count": self.gap_count,
+            "longest_gap_frames": self.longest_gap_frames,
+            "continuity_ratio": self.continuity_ratio,
+            "fragmentation_index": self.fragmentation_index,
+            "mean_association_iou": self.mean_association_iou,
+            "minimum_association_iou": self.minimum_association_iou,
+            "mean_severity_score": self.mean_severity_score,
+            "maximum_severity_score": self.maximum_severity_score,
+            "mean_changed_ratio": self.mean_changed_ratio,
+            "mean_area_px": self.mean_area_px,
+            "center_jitter_px": self.center_jitter_px,
+            "area_stability_ratio": self.area_stability_ratio,
+            "recovery_count": self.recovery_count,
+            "split_event_count": self.split_event_count,
+            "merge_event_count": self.merge_event_count,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class FrameTrackingResult:
     """Store temporal tracking evidence produced for one video frame.
 
@@ -316,6 +381,7 @@ __all__ = [
     "TrackLifecycleState",
     "TrackObservation",
     "TrackState",
+    "TrackSummary",
     "format_event_label",
     "format_track_label",
 ]

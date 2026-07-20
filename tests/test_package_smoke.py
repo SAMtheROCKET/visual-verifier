@@ -12,7 +12,7 @@ from visual_verifier import (
 )
 from visual_verifier.cli import main
 
-EXPECTED_VERSION_STR = "0.1.0a0"
+EXPECTED_VERSION_STR = "0.2.0a0"
 EXPECTED_PUBLIC_EXPORTS_FROZENSET = frozenset(
     {
         "VerificationResult",
