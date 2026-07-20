@@ -1,0 +1,1734 @@
+#================================================================
+# V5.0b - Standalone CLI Batch Runner
+#================================================================
+# Purpose:
+#   1. Create a standalone CLI script that can actually run verification
+#   2. Read v4_0_batch_cases.csv
+#   3. Process each enabled raw/processed video pair
+#   4. Use MANUAL_CSV target validation
+#   5. Generate CLI-run case reports and batch summary
+#
+# Important:
+#   V5.0a only validated config.
+#   V5.0b actually runs the visual verification engine from terminal.
+#================================================================
+
+import os
+import sys
+import subprocess
+from pathlib import Path
+
+
+#================================================================
+# PROJECT PATHS
+#================================================================
+
+PROJECT_ROOT = Path(r"C:\work_tickets\blur_detect_v2")
+
+CLI_PROJECT_DIR = PROJECT_ROOT / "visual_verifier_cli"
+
+CLI_SCRIPT_PATH = CLI_PROJECT_DIR / "visual_verify_cli_v5_0b.py"
+CLI_README_PATH = CLI_PROJECT_DIR / "README_V5_0b.md"
+CLI_RUN_BAT_PATH = CLI_PROJECT_DIR / "run_v5_0b_run.bat"
+CLI_RUN_PS1_PATH = CLI_PROJECT_DIR / "run_v5_0b_run.ps1"
+
+BATCH_CASES_CSV = PROJECT_ROOT / "input" / "v4_0_batch_cases.csv"
+
+CLI_OUTPUT_DIR = PROJECT_ROOT / "output" / "cli_runs" / "v5_0b_run"
+
+CLI_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+CLI_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+#================================================================
+# CLI SCRIPT CONTENT
+#================================================================
+
+cli_script = r'''
+import argparse
+import csv
+import json
+import sys
+from pathlib import Path
+from datetime import datetime
+
+import cv2
+import numpy as np
+import pandas as pd
+
+
+TOOL_VERSION = "v5_0b"
+
+
+REQUIRED_BATCH_COLUMNS = [
+    "enabled",
+    "case_id",
+    "processed_video_file_name",
+    "raw_video_path",
+    "processed_video_path",
+    "target_region_source_mode",
+    "manual_target_regions_csv_path"
+]
+
+
+SUPPORTED_TARGET_MODES = [
+    "MANUAL_CSV",
+    "AUTO_BOOTSTRAP_FROM_BEST_TRACK"
+]
+
+
+DIFF_THRESHOLD = 30
+MIN_BOX_AREA = 80
+MIN_BOX_WIDTH = 6
+MIN_BOX_HEIGHT = 6
+MERGE_KERNEL_SIZE = 9
+BOX_PADDING = 3
+
+TRACK_IOU_THRESHOLD = 0.20
+MAX_TRACK_MISSING_FRAMES = 3
+
+DIFF_NORMALIZER = 80.0
+CHANGED_RATIO_NORMALIZER = 0.75
+
+MIN_TARGET_IOU_WITH_PROCESSED_REGION = 0.10
+MIN_TARGET_COVERAGE_RATIO = 0.50
+
+EXPECT_PROCESSING_IN_EVERY_FRAME = True
+
+
+def normalize_bool(value):
+    return str(value).strip().lower() in ["true", "1", "yes", "y"]
+
+
+def sanitize_for_folder_name(value):
+    value = str(value)
+    invalid_chars = ["\\", "/", ":", "*", "?", "\"", "<", ">", "|", " "]
+
+    for char in invalid_chars:
+        value = value.replace(char, "_")
+
+    return value
+
+
+def convert_for_json(obj):
+    if obj is None:
+        return None
+
+    if isinstance(obj, dict):
+        return {str(k): convert_for_json(v) for k, v in obj.items()}
+
+    if isinstance(obj, list):
+        return [convert_for_json(v) for v in obj]
+
+    if isinstance(obj, tuple):
+        return [convert_for_json(v) for v in obj]
+
+    if isinstance(obj, np.ndarray):
+        return convert_for_json(obj.tolist())
+
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+
+    if isinstance(obj, (np.floating,)):
+        value = float(obj)
+        if np.isnan(value):
+            return None
+        if np.isinf(value):
+            return "inf"
+        return value
+
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+
+    try:
+        if pd.isna(obj):
+            return None
+    except Exception:
+        pass
+
+    return obj
+
+
+def read_csv_as_dicts(csv_path):
+    csv_path = Path(csv_path)
+
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Cases CSV not found: {csv_path}")
+
+    rows = []
+
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames or []
+
+        missing_columns = [
+            column for column in REQUIRED_BATCH_COLUMNS
+            if column not in fieldnames
+        ]
+
+        if missing_columns:
+            raise ValueError(
+                "Cases CSV is missing required columns: "
+                + ", ".join(missing_columns)
+            )
+
+        for row in reader:
+            rows.append(row)
+
+    return rows
+
+
+def write_csv_dicts(rows, output_csv):
+    output_csv = Path(output_csv)
+
+    if not rows:
+        output_csv.write_text("", encoding="utf-8")
+        return
+
+    fieldnames = list(rows[0].keys())
+
+    with output_csv.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for row in rows:
+            csv_row = {}
+
+            for key, value in row.items():
+                if isinstance(value, (list, dict)):
+                    csv_row[key] = json.dumps(value, ensure_ascii=False)
+                else:
+                    csv_row[key] = value
+
+            writer.writerow(csv_row)
+
+
+def validate_case(row):
+    case_id = str(row.get("case_id", "")).strip()
+    processed_video_file_name = str(row.get("processed_video_file_name", "")).strip()
+    raw_video_path = Path(str(row.get("raw_video_path", "")).strip())
+    processed_video_path = Path(str(row.get("processed_video_path", "")).strip())
+    target_region_source_mode = str(row.get("target_region_source_mode", "")).strip()
+    manual_target_regions_csv_path = Path(
+        str(row.get("manual_target_regions_csv_path", "")).strip()
+    )
+
+    errors = []
+    warnings = []
+
+    if not case_id:
+        errors.append("case_id is empty")
+
+    if not processed_video_file_name:
+        errors.append("processed_video_file_name is empty")
+
+    if not raw_video_path.exists():
+        errors.append(f"raw_video_path does not exist: {raw_video_path}")
+
+    if not processed_video_path.exists():
+        errors.append(f"processed_video_path does not exist: {processed_video_path}")
+
+    if target_region_source_mode not in SUPPORTED_TARGET_MODES:
+        errors.append(
+            f"Unsupported target_region_source_mode: {target_region_source_mode}"
+        )
+
+    if target_region_source_mode == "MANUAL_CSV":
+        if not str(manual_target_regions_csv_path).strip():
+            errors.append("manual_target_regions_csv_path is empty for MANUAL_CSV mode")
+        elif not manual_target_regions_csv_path.exists():
+            errors.append(
+                f"manual_target_regions_csv_path does not exist: "
+                f"{manual_target_regions_csv_path}"
+            )
+
+    if target_region_source_mode == "AUTO_BOOTSTRAP_FROM_BEST_TRACK":
+        if str(manual_target_regions_csv_path).strip():
+            warnings.append(
+                "manual_target_regions_csv_path is provided but ignored in AUTO_BOOTSTRAP mode"
+            )
+
+    if errors:
+        validation_status = "ERROR"
+    else:
+        validation_status = "READY_TO_RUN"
+
+    return {
+        "case_id": case_id,
+        "processed_video_file_name": processed_video_file_name,
+        "enabled": normalize_bool(row.get("enabled", "")),
+        "target_region_source_mode": target_region_source_mode,
+        "raw_video_path": str(raw_video_path),
+        "processed_video_path": str(processed_video_path),
+        "manual_target_regions_csv_path": str(manual_target_regions_csv_path),
+        "validation_status": validation_status,
+        "error_count": len(errors),
+        "warning_count": len(warnings),
+        "errors": errors,
+        "warnings": warnings
+    }
+
+
+def get_video_info(video_path):
+    cap = cv2.VideoCapture(str(video_path))
+
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
+
+    fps = float(cap.get(cv2.CAP_PROP_FPS))
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    if fps > 0:
+        duration_sec = round(frame_count / fps, 6)
+    else:
+        duration_sec = 0.0
+
+    cap.release()
+
+    return {
+        "path": str(video_path),
+        "fps": fps,
+        "frame_count": frame_count,
+        "width": width,
+        "height": height,
+        "duration_sec": duration_sec
+    }
+
+
+def calculate_iou(box_a, box_b):
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+
+    inter_area = inter_w * inter_h
+
+    area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+    area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+
+    union_area = area_a + area_b - inter_area
+
+    if union_area <= 0:
+        return 0.0
+
+    return inter_area / union_area
+
+
+def calculate_target_coverage_ratio(target_box, processed_box):
+    tx1, ty1, tx2, ty2 = target_box
+    px1, py1, px2, py2 = processed_box
+
+    inter_x1 = max(tx1, px1)
+    inter_y1 = max(ty1, py1)
+    inter_x2 = min(tx2, px2)
+    inter_y2 = min(ty2, py2)
+
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+
+    inter_area = inter_w * inter_h
+
+    target_area = max(0, tx2 - tx1) * max(0, ty2 - ty1)
+
+    if target_area <= 0:
+        return 0.0
+
+    return inter_area / target_area
+
+
+def calculate_laplacian_variance(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+def severity_label_from_score(score):
+    if score >= 80:
+        return "VERY_HIGH"
+    if score >= 60:
+        return "HIGH"
+    if score >= 30:
+        return "MEDIUM"
+    if score >= 10:
+        return "LOW"
+    return "VERY_LOW"
+
+
+def compute_region_metrics(raw_frame, processed_frame, box):
+    x1, y1, x2, y2 = box
+
+    raw_crop = raw_frame[y1:y2, x1:x2]
+    processed_crop = processed_frame[y1:y2, x1:x2]
+
+    if raw_crop.size == 0 or processed_crop.size == 0:
+        return {
+            "changed_pixels": 0,
+            "changed_ratio": 0.0,
+            "mean_diff": 0.0,
+            "max_diff": 0.0,
+            "laplacian_raw": 0.0,
+            "laplacian_processed": 0.0,
+            "blur_percentage_processed_vs_raw": 0.0,
+            "edge_change_ratio": 0.0,
+            "severity_score": 0.0,
+            "severity_label": "VERY_LOW"
+        }
+
+    diff = cv2.absdiff(raw_crop, processed_crop)
+    gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+
+    changed_pixels = int(np.sum(gray_diff > DIFF_THRESHOLD))
+    total_pixels = int(gray_diff.shape[0] * gray_diff.shape[1])
+
+    if total_pixels > 0:
+        changed_ratio = changed_pixels / total_pixels
+    else:
+        changed_ratio = 0.0
+
+    mean_diff = float(np.mean(gray_diff))
+    max_diff = float(np.max(gray_diff))
+
+    lap_raw = calculate_laplacian_variance(raw_crop)
+    lap_processed = calculate_laplacian_variance(processed_crop)
+
+    if lap_raw > 0:
+        blur_percentage = max(0.0, (lap_raw - lap_processed) / lap_raw * 100.0)
+        edge_change_ratio = abs(lap_processed - lap_raw) / lap_raw
+    else:
+        blur_percentage = 0.0
+        edge_change_ratio = 0.0
+
+    diff_component = min(1.0, mean_diff / DIFF_NORMALIZER)
+    density_component = min(1.0, changed_ratio / CHANGED_RATIO_NORMALIZER)
+    edge_component = min(1.0, edge_change_ratio)
+
+    severity_score = (
+        0.45 * diff_component
+        + 0.25 * density_component
+        + 0.30 * edge_component
+    ) * 100.0
+
+    severity_score = round(float(severity_score), 2)
+
+    return {
+        "changed_pixels": changed_pixels,
+        "changed_ratio": round(float(changed_ratio), 6),
+        "mean_diff": round(float(mean_diff), 6),
+        "max_diff": round(float(max_diff), 6),
+        "laplacian_raw": round(float(lap_raw), 6),
+        "laplacian_processed": round(float(lap_processed), 6),
+        "blur_percentage_processed_vs_raw": round(float(blur_percentage), 6),
+        "edge_change_ratio": round(float(edge_change_ratio), 6),
+        "severity_score": severity_score,
+        "severity_label": severity_label_from_score(severity_score)
+    }
+
+
+def detect_candidate_regions(raw_frame, processed_frame):
+    diff = cv2.absdiff(raw_frame, processed_frame)
+    gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+
+    _, binary = cv2.threshold(
+        gray_diff,
+        DIFF_THRESHOLD,
+        255,
+        cv2.THRESH_BINARY
+    )
+
+    kernel = np.ones((MERGE_KERNEL_SIZE, MERGE_KERNEL_SIZE), np.uint8)
+
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    binary = cv2.dilate(binary, kernel, iterations=1)
+
+    contours, _ = cv2.findContours(
+        binary,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    frame_height, frame_width = gray_diff.shape[:2]
+
+    candidate_boxes = []
+
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+
+        x1 = max(0, x - BOX_PADDING)
+        y1 = max(0, y - BOX_PADDING)
+        x2 = min(frame_width, x + w + BOX_PADDING)
+        y2 = min(frame_height, y + h + BOX_PADDING)
+
+        width = x2 - x1
+        height = y2 - y1
+        area = width * height
+
+        if area < MIN_BOX_AREA:
+            continue
+
+        if width < MIN_BOX_WIDTH or height < MIN_BOX_HEIGHT:
+            continue
+
+        candidate_boxes.append((x1, y1, x2, y2))
+
+    candidate_boxes = sorted(candidate_boxes, key=lambda b: (b[1], b[0]))
+
+    return candidate_boxes
+
+
+def assign_track_id(region_row, track_states, used_track_ids, next_track_id, frame_number):
+    current_box = (
+        int(region_row["x1"]),
+        int(region_row["y1"]),
+        int(region_row["x2"]),
+        int(region_row["y2"])
+    )
+
+    best_track_id = None
+    best_iou = 0.0
+
+    for track_id, state in track_states.items():
+        if track_id in used_track_ids:
+            continue
+
+        frame_gap = frame_number - int(state["last_frame"])
+
+        if frame_gap > MAX_TRACK_MISSING_FRAMES + 1:
+            continue
+
+        last_box = state["last_box"]
+        iou = calculate_iou(current_box, last_box)
+
+        if iou > best_iou:
+            best_iou = iou
+            best_track_id = track_id
+
+    if best_track_id is not None and best_iou >= TRACK_IOU_THRESHOLD:
+        track_id = best_track_id
+    else:
+        track_id = next_track_id
+        next_track_id += 1
+
+        track_states[track_id] = {
+            "track_id": track_id,
+            "first_frame": frame_number,
+            "last_frame": frame_number,
+            "last_box": current_box,
+            "frames_present": [],
+            "region_ids": [],
+            "severity_scores": [],
+            "areas": [],
+            "changed_ratios": [],
+            "mean_diffs": []
+        }
+
+    track_states[track_id]["last_frame"] = frame_number
+    track_states[track_id]["last_box"] = current_box
+    track_states[track_id]["frames_present"].append(frame_number)
+    track_states[track_id]["region_ids"].append(int(region_row["global_region_id"]))
+    track_states[track_id]["severity_scores"].append(float(region_row["severity_score"]))
+    track_states[track_id]["areas"].append(float(region_row["area_px"]))
+    track_states[track_id]["changed_ratios"].append(float(region_row["changed_ratio"]))
+    track_states[track_id]["mean_diffs"].append(float(region_row["mean_diff"]))
+
+    used_track_ids.add(track_id)
+
+    return track_id, next_track_id
+
+
+def build_track_report(track_states):
+    rows = []
+
+    for track_id, state in track_states.items():
+        first_frame = int(state["first_frame"])
+        last_frame = int(state["last_frame"])
+        frames_present = sorted(list(set([int(x) for x in state["frames_present"]])))
+
+        all_frames = list(range(first_frame, last_frame + 1))
+        missing_frames = [frame for frame in all_frames if frame not in frames_present]
+
+        frames_present_count = len(frames_present)
+        track_duration_frames = len(all_frames)
+
+        if track_duration_frames > 0:
+            presence_ratio = frames_present_count / track_duration_frames
+        else:
+            presence_ratio = 0.0
+
+        severity_scores = state["severity_scores"]
+        areas = state["areas"]
+        changed_ratios = state["changed_ratios"]
+        mean_diffs = state["mean_diffs"]
+
+        max_consecutive_missing = 0
+        current_missing = 0
+
+        for frame in all_frames:
+            if frame in missing_frames:
+                current_missing += 1
+                max_consecutive_missing = max(max_consecutive_missing, current_missing)
+            else:
+                current_missing = 0
+
+        if missing_frames:
+            track_status = "HAS_TEMPORAL_GAPS"
+        else:
+            track_status = "CONTINUOUS"
+
+        if frames_present_count <= 1 and max(severity_scores or [0]) < 20:
+            is_probable_false_positive_track = True
+            clean_track_status = "PROBABLE_FALSE_POSITIVE_TRACK"
+        else:
+            is_probable_false_positive_track = False
+            clean_track_status = "CLEAN_TRACK"
+
+        rows.append({
+            "track_id": int(track_id),
+            "track_status": track_status,
+            "clean_track_status": clean_track_status,
+            "is_probable_false_positive_track": bool(is_probable_false_positive_track),
+            "first_frame": first_frame,
+            "last_frame": last_frame,
+            "track_duration_frames": int(track_duration_frames),
+            "frames_present_count": int(frames_present_count),
+            "missing_frame_count": int(len(missing_frames)),
+            "presence_ratio": round(float(presence_ratio), 6),
+            "frames_present": frames_present,
+            "missing_frames": missing_frames,
+            "max_consecutive_missing_frames": int(max_consecutive_missing),
+            "total_regions_in_track": int(len(state["region_ids"])),
+            "avg_severity_score": round(float(np.mean(severity_scores)), 2) if severity_scores else 0.0,
+            "max_severity_score": round(float(np.max(severity_scores)), 2) if severity_scores else 0.0,
+            "min_severity_score": round(float(np.min(severity_scores)), 2) if severity_scores else 0.0,
+            "avg_area_px": round(float(np.mean(areas)), 2) if areas else 0.0,
+            "max_area_px": round(float(np.max(areas)), 2) if areas else 0.0,
+            "avg_changed_ratio": round(float(np.mean(changed_ratios)), 6) if changed_ratios else 0.0,
+            "avg_mean_diff": round(float(np.mean(mean_diffs)), 6) if mean_diffs else 0.0
+        })
+
+    return pd.DataFrame(rows)
+
+
+def load_manual_targets(csv_path):
+    target_df = pd.read_csv(csv_path)
+
+    required_columns = [
+        "frame_number",
+        "target_id",
+        "target_label",
+        "x1",
+        "y1",
+        "x2",
+        "y2"
+    ]
+
+    for column in required_columns:
+        if column not in target_df.columns:
+            raise ValueError(f"Manual target CSV is missing required column: {column}")
+
+    if "is_active" in target_df.columns:
+        active_mask = (
+            target_df["is_active"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .isin(["true", "1", "yes", "y"])
+        )
+    else:
+        active_mask = pd.Series([True] * len(target_df))
+
+    if "manual_review_decision" in target_df.columns:
+        keep_mask = (
+            target_df["manual_review_decision"]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .ne("IGNORE")
+        )
+    else:
+        keep_mask = pd.Series([True] * len(target_df))
+
+    target_df = target_df[active_mask & keep_mask].copy()
+
+    target_df["source"] = target_df.get("source", "MANUAL_CSV").astype(str)
+    target_df["v5_0b_target_source_mode"] = "MANUAL_CSV"
+
+    return target_df
+
+
+def build_auto_targets_from_best_track(region_df, track_df, frame_width, frame_height):
+    if len(track_df) == 0:
+        return pd.DataFrame([]), None
+
+    clean_df = track_df[
+        track_df["clean_track_status"].astype(str).eq("CLEAN_TRACK")
+    ].copy()
+
+    if len(clean_df) == 0:
+        clean_df = track_df.copy()
+
+    clean_df = clean_df.sort_values(
+        by=["frames_present_count", "max_severity_score"],
+        ascending=[False, False]
+    )
+
+    selected_track_id = int(clean_df.iloc[0]["track_id"])
+
+    selected_regions = region_df[
+        region_df["track_id"] == selected_track_id
+    ].copy()
+
+    target_rows = []
+
+    for _, row in selected_regions.iterrows():
+        x1 = max(0, int(row["x1"]) - 8)
+        y1 = max(0, int(row["y1"]) - 8)
+        x2 = min(frame_width, int(row["x2"]) + 8)
+        y2 = min(frame_height, int(row["y2"]) + 8)
+
+        target_rows.append({
+            "frame_number": int(row["frame_number"]),
+            "target_id": 1,
+            "target_label": "object_to_process",
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "is_active": True,
+            "source": f"AUTO_BOOTSTRAP_FROM_TRACK_{selected_track_id}",
+            "v5_0b_target_source_mode": "AUTO_BOOTSTRAP_FROM_BEST_TRACK"
+        })
+
+    return pd.DataFrame(target_rows), selected_track_id
+
+
+def validate_targets(target_df, region_df):
+    rows = []
+
+    for _, target_row in target_df.iterrows():
+        frame_number = int(target_row["frame_number"])
+        target_id = int(target_row["target_id"])
+        target_label = str(target_row["target_label"])
+
+        target_box = (
+            int(target_row["x1"]),
+            int(target_row["y1"]),
+            int(target_row["x2"]),
+            int(target_row["y2"])
+        )
+
+        regions_for_frame = region_df[
+            region_df["frame_number"] == frame_number
+        ].copy()
+
+        best_iou = 0.0
+        best_target_coverage_ratio = 0.0
+        best_region_global_id = None
+        best_region_track_id = None
+        best_region_severity_score = 0.0
+        best_region_severity_label = ""
+
+        for _, region_row in regions_for_frame.iterrows():
+            processed_box = (
+                int(region_row["x1"]),
+                int(region_row["y1"]),
+                int(region_row["x2"]),
+                int(region_row["y2"])
+            )
+
+            iou = calculate_iou(target_box, processed_box)
+            coverage_ratio = calculate_target_coverage_ratio(target_box, processed_box)
+
+            if coverage_ratio > best_target_coverage_ratio:
+                best_target_coverage_ratio = coverage_ratio
+                best_iou = iou
+                best_region_global_id = int(region_row["global_region_id"])
+                best_region_track_id = int(region_row["track_id"])
+                best_region_severity_score = float(region_row["severity_score"])
+                best_region_severity_label = str(region_row["severity_label"])
+
+        is_target_covered = (
+            best_iou >= MIN_TARGET_IOU_WITH_PROCESSED_REGION
+            or best_target_coverage_ratio >= MIN_TARGET_COVERAGE_RATIO
+        )
+
+        if len(regions_for_frame) == 0:
+            target_status = "FAIL_NO_PROCESSED_REGION_IN_FRAME"
+        elif is_target_covered:
+            target_status = "PASS_TARGET_COVERED"
+        else:
+            target_status = "FAIL_TARGET_NOT_COVERED"
+
+        rows.append({
+            "frame_number": frame_number,
+            "target_id": target_id,
+            "target_label": target_label,
+            "target_x1": int(target_row["x1"]),
+            "target_y1": int(target_row["y1"]),
+            "target_x2": int(target_row["x2"]),
+            "target_y2": int(target_row["y2"]),
+            "num_processed_regions_in_frame": int(len(regions_for_frame)),
+            "best_matching_region_global_id": best_region_global_id,
+            "best_matching_region_track_id": best_region_track_id,
+            "best_iou_with_processed_region": round(float(best_iou), 6),
+            "best_target_coverage_ratio": round(float(best_target_coverage_ratio), 6),
+            "best_region_severity_score": round(float(best_region_severity_score), 2),
+            "best_region_severity_label": best_region_severity_label,
+            "is_target_covered": bool(is_target_covered),
+            "target_status": target_status
+        })
+
+    return pd.DataFrame(rows)
+
+
+def draw_label(image, text, x, y, bg_color, text_color):
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.55
+    thickness = 2
+
+    text_size, _ = cv2.getTextSize(text, font, font_scale, thickness)
+    text_w, text_h = text_size
+
+    x = int(max(0, x))
+    y = int(max(text_h + 8, y))
+
+    cv2.rectangle(
+        image,
+        (x, y - text_h - 8),
+        (x + text_w + 8, y + 4),
+        bg_color,
+        -1
+    )
+
+    cv2.putText(
+        image,
+        text,
+        (x + 4, y - 4),
+        font,
+        font_scale,
+        text_color,
+        thickness,
+        cv2.LINE_AA
+    )
+
+
+def draw_annotated_frame(frame, frame_number, region_df, target_validation_df):
+    annotated = frame.copy()
+
+    regions_for_frame = region_df[
+        region_df["frame_number"] == frame_number
+    ].copy()
+
+    targets_for_frame = target_validation_df[
+        target_validation_df["frame_number"] == frame_number
+    ].copy()
+
+    for _, region_row in regions_for_frame.iterrows():
+        x1 = int(region_row["x1"])
+        y1 = int(region_row["y1"])
+        x2 = int(region_row["x2"])
+        y2 = int(region_row["y2"])
+
+        track_id = int(region_row["track_id"])
+        severity_score = float(region_row["severity_score"])
+
+        cv2.rectangle(
+            annotated,
+            (x1, y1),
+            (x2, y2),
+            (0, 255, 0),
+            2
+        )
+
+        draw_label(
+            annotated,
+            f"PROC T{track_id} S:{severity_score}",
+            x1,
+            max(25, y1 - 8),
+            (0, 255, 0),
+            (0, 0, 0)
+        )
+
+    for _, target_row in targets_for_frame.iterrows():
+        x1 = int(target_row["target_x1"])
+        y1 = int(target_row["target_y1"])
+        x2 = int(target_row["target_x2"])
+        y2 = int(target_row["target_y2"])
+
+        target_id = int(target_row["target_id"])
+        target_status = str(target_row["target_status"])
+
+        if str(target_status).startswith("PASS"):
+            color = (255, 0, 255)
+        else:
+            color = (0, 0, 255)
+
+        cv2.rectangle(
+            annotated,
+            (x1, y1),
+            (x2, y2),
+            color,
+            3
+        )
+
+        draw_label(
+            annotated,
+            f"TARGET {target_id}: {target_status}",
+            x1,
+            max(50, y2 + 25),
+            color,
+            (255, 255, 255)
+        )
+
+    draw_label(
+        annotated,
+        f"{TOOL_VERSION.upper()} | Frame {frame_number}",
+        20,
+        35,
+        (50, 50, 50),
+        (255, 255, 255)
+    )
+
+    return annotated
+
+
+def run_single_case(case_row, output_root):
+    case_id = str(case_row["case_id"])
+    processed_video_file_name = str(case_row["processed_video_file_name"])
+    raw_video_path = Path(str(case_row["raw_video_path"]))
+    processed_video_path = Path(str(case_row["processed_video_path"]))
+    target_mode = str(case_row["target_region_source_mode"])
+    manual_target_csv = Path(str(case_row["manual_target_regions_csv_path"]))
+
+    case_folder = (
+        sanitize_for_folder_name(case_id)
+        + "__"
+        + sanitize_for_folder_name(processed_video_file_name)
+    )
+
+    output_dir = Path(output_root) / case_folder
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    raw_frames_dir = output_dir / "raw_frames"
+    processed_frames_dir = output_dir / "processed_frames"
+    annotated_frames_dir = output_dir / "annotated_frames"
+    region_crops_dir = output_dir / "region_crops"
+    target_crops_dir = output_dir / "target_crops"
+    rejected_region_crops_dir = output_dir / "rejected_region_crops"
+
+    for folder in [
+        raw_frames_dir,
+        processed_frames_dir,
+        annotated_frames_dir,
+        region_crops_dir,
+        target_crops_dir,
+        rejected_region_crops_dir
+    ]:
+        folder.mkdir(parents=True, exist_ok=True)
+
+    output_annotated_video = output_dir / f"{processed_video_file_name}_{TOOL_VERSION}_annotated_video.mp4"
+    output_frame_report = output_dir / f"{processed_video_file_name}_{TOOL_VERSION}_frame_report.csv"
+    output_region_report = output_dir / f"{processed_video_file_name}_{TOOL_VERSION}_region_report.csv"
+    output_rejected_region_report = output_dir / f"{processed_video_file_name}_{TOOL_VERSION}_rejected_region_report.csv"
+    output_track_report = output_dir / f"{processed_video_file_name}_{TOOL_VERSION}_track_report.csv"
+    output_target_regions_used = output_dir / f"{processed_video_file_name}_{TOOL_VERSION}_target_regions_used.csv"
+    output_target_validation_report = output_dir / f"{processed_video_file_name}_{TOOL_VERSION}_target_validation_report.csv"
+    output_summary_txt = output_dir / f"{processed_video_file_name}_{TOOL_VERSION}_summary.txt"
+    output_summary_json = output_dir / f"{processed_video_file_name}_{TOOL_VERSION}_summary.json"
+
+    raw_info = get_video_info(raw_video_path)
+    processed_info = get_video_info(processed_video_path)
+
+    if raw_info["frame_count"] != processed_info["frame_count"]:
+        raise ValueError(
+            f"Frame count mismatch: raw={raw_info['frame_count']}, processed={processed_info['frame_count']}"
+        )
+
+    if raw_info["width"] != processed_info["width"] or raw_info["height"] != processed_info["height"]:
+        raise ValueError("Raw and processed video dimensions do not match.")
+
+    cap_raw = cv2.VideoCapture(str(raw_video_path))
+    cap_processed = cv2.VideoCapture(str(processed_video_path))
+
+    frame_count = raw_info["frame_count"]
+    fps = raw_info["fps"]
+    width = raw_info["width"]
+    height = raw_info["height"]
+
+    global_region_id = 0
+    next_track_id = 1
+    track_states = {}
+
+    frame_rows = []
+    region_rows = []
+    rejected_rows = []
+
+    print("====================================================")
+    print(f"{TOOL_VERSION.upper()} CASE STARTED: {case_id}")
+    print("====================================================")
+    print(f"Raw video: {raw_video_path}")
+    print(f"Processed video: {processed_video_path}")
+    print(f"Target mode: {target_mode}")
+    print(f"Output dir: {output_dir}")
+
+    for frame_number in range(1, frame_count + 1):
+        ret_raw, raw_frame = cap_raw.read()
+        ret_processed, processed_frame = cap_processed.read()
+
+        if not ret_raw or not ret_processed:
+            break
+
+        timestamp_sec = round((frame_number - 1) / fps, 6) if fps > 0 else 0.0
+
+        raw_frame_path = raw_frames_dir / f"raw_frame_{frame_number:06d}.png"
+        processed_frame_path = processed_frames_dir / f"{processed_video_file_name}_processed_frame_{frame_number:06d}.png"
+
+        cv2.imwrite(str(raw_frame_path), raw_frame)
+        cv2.imwrite(str(processed_frame_path), processed_frame)
+
+        candidate_boxes = detect_candidate_regions(raw_frame, processed_frame)
+
+        accepted_regions_for_frame = []
+        used_track_ids = set()
+
+        for box_id_in_frame, box in enumerate(candidate_boxes, start=1):
+            x1, y1, x2, y2 = box
+            width_box = x2 - x1
+            height_box = y2 - y1
+            area_px = width_box * height_box
+
+            global_region_id += 1
+
+            metrics = compute_region_metrics(raw_frame, processed_frame, box)
+
+            region_row = {
+                "processed_video_file_name": processed_video_file_name,
+                "global_region_id": int(global_region_id),
+                "frame_number": int(frame_number),
+                "timestamp_sec": float(timestamp_sec),
+                "box_id_in_frame": int(box_id_in_frame),
+                "track_id": -1,
+                "x1": int(x1),
+                "y1": int(y1),
+                "x2": int(x2),
+                "y2": int(y2),
+                "width": int(width_box),
+                "height": int(height_box),
+                "area_px": int(area_px),
+                **metrics,
+                "raw_crop_path": "",
+                "processed_crop_path": ""
+            }
+
+            track_id, next_track_id = assign_track_id(
+                region_row,
+                track_states,
+                used_track_ids,
+                next_track_id,
+                frame_number
+            )
+
+            region_row["track_id"] = int(track_id)
+
+            raw_crop_path = region_crops_dir / (
+                f"{processed_video_file_name}_{TOOL_VERSION}_frame_{frame_number:06d}"
+                f"_track_{track_id:03d}_box_{box_id_in_frame:03d}_raw.png"
+            )
+
+            processed_crop_path = region_crops_dir / (
+                f"{processed_video_file_name}_{TOOL_VERSION}_frame_{frame_number:06d}"
+                f"_track_{track_id:03d}_box_{box_id_in_frame:03d}_processed.png"
+            )
+
+            cv2.imwrite(str(raw_crop_path), raw_frame[y1:y2, x1:x2])
+            cv2.imwrite(str(processed_crop_path), processed_frame[y1:y2, x1:x2])
+
+            region_row["raw_crop_path"] = str(raw_crop_path)
+            region_row["processed_crop_path"] = str(processed_crop_path)
+
+            accepted_regions_for_frame.append(region_row)
+            region_rows.append(region_row)
+
+        if len(accepted_regions_for_frame) > 0:
+            frame_status = "PASS - PROCESSING DETECTED"
+        else:
+            frame_status = "FAIL - NO PROCESSING DETECTED"
+
+        max_severity = max(
+            [float(row["severity_score"]) for row in accepted_regions_for_frame],
+            default=0.0
+        )
+
+        avg_severity = round(
+            float(np.mean([float(row["severity_score"]) for row in accepted_regions_for_frame])),
+            2
+        ) if accepted_regions_for_frame else 0.0
+
+        frame_rows.append({
+            "processed_video_file_name": processed_video_file_name,
+            "frame_number": int(frame_number),
+            "timestamp_sec": float(timestamp_sec),
+            "num_candidate_regions": int(len(candidate_boxes)),
+            "num_accepted_regions": int(len(accepted_regions_for_frame)),
+            "num_rejected_regions": 0,
+            "has_detected_processing": bool(len(accepted_regions_for_frame) > 0),
+            "frame_status": frame_status,
+            "avg_severity_score": avg_severity,
+            "max_severity_score": round(float(max_severity), 2)
+        })
+
+        print(
+            f"Frame {frame_number}/{frame_count} | "
+            f"Candidates: {len(candidate_boxes)} | "
+            f"Accepted: {len(accepted_regions_for_frame)} | "
+            f"Max severity: {round(float(max_severity), 2)} | "
+            f"Status: {frame_status}"
+        )
+
+    cap_raw.release()
+    cap_processed.release()
+
+    frame_df = pd.DataFrame(frame_rows)
+    region_df = pd.DataFrame(region_rows)
+    rejected_region_df = pd.DataFrame(rejected_rows)
+    track_df = build_track_report(track_states)
+
+    if target_mode == "MANUAL_CSV":
+        target_df = load_manual_targets(manual_target_csv)
+        selected_auto_target_track_id = None
+        target_source_status = "MANUAL_CSV_LOADED_AND_FILTERED"
+    else:
+        target_df, selected_auto_target_track_id = build_auto_targets_from_best_track(
+            region_df,
+            track_df,
+            width,
+            height
+        )
+        target_source_status = "AUTO_BOOTSTRAP_FROM_BEST_TRACK"
+
+    target_validation_df = validate_targets(target_df, region_df)
+
+    for _, target_row in target_df.iterrows():
+        frame_number = int(target_row["frame_number"])
+        raw_frame_path = raw_frames_dir / f"raw_frame_{frame_number:06d}.png"
+        processed_frame_path = processed_frames_dir / f"{processed_video_file_name}_processed_frame_{frame_number:06d}.png"
+
+        raw_frame = cv2.imread(str(raw_frame_path))
+        processed_frame = cv2.imread(str(processed_frame_path))
+
+        if raw_frame is None or processed_frame is None:
+            continue
+
+        x1 = int(target_row["x1"])
+        y1 = int(target_row["y1"])
+        x2 = int(target_row["x2"])
+        y2 = int(target_row["y2"])
+        target_id = int(target_row["target_id"])
+
+        raw_target_crop_path = target_crops_dir / (
+            f"{processed_video_file_name}_{TOOL_VERSION}_frame_{frame_number:06d}"
+            f"_target_{target_id:03d}_raw.png"
+        )
+
+        processed_target_crop_path = target_crops_dir / (
+            f"{processed_video_file_name}_{TOOL_VERSION}_frame_{frame_number:06d}"
+            f"_target_{target_id:03d}_processed.png"
+        )
+
+        cv2.imwrite(str(raw_target_crop_path), raw_frame[y1:y2, x1:x2])
+        cv2.imwrite(str(processed_target_crop_path), processed_frame[y1:y2, x1:x2])
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+    writer = cv2.VideoWriter(
+        str(output_annotated_video),
+        fourcc,
+        fps,
+        (width, height)
+    )
+
+    for frame_number in range(1, frame_count + 1):
+        processed_frame_path = processed_frames_dir / f"{processed_video_file_name}_processed_frame_{frame_number:06d}.png"
+        processed_frame = cv2.imread(str(processed_frame_path))
+
+        if processed_frame is None:
+            continue
+
+        annotated_frame = draw_annotated_frame(
+            processed_frame,
+            frame_number,
+            region_df,
+            target_validation_df
+        )
+
+        annotated_frame_path = annotated_frames_dir / (
+            f"{processed_video_file_name}_{TOOL_VERSION}_annotated_frame_{frame_number:06d}.png"
+        )
+
+        cv2.imwrite(str(annotated_frame_path), annotated_frame)
+        writer.write(annotated_frame)
+
+    writer.release()
+
+    frame_df.to_csv(output_frame_report, index=False, encoding="utf-8-sig")
+    region_df.to_csv(output_region_report, index=False, encoding="utf-8-sig")
+    rejected_region_df.to_csv(output_rejected_region_report, index=False, encoding="utf-8-sig")
+    track_df.to_csv(output_track_report, index=False, encoding="utf-8-sig")
+    target_df.to_csv(output_target_regions_used, index=False, encoding="utf-8-sig")
+    target_validation_df.to_csv(output_target_validation_report, index=False, encoding="utf-8-sig")
+
+    frames_checked = int(len(frame_df))
+    frames_with_detected_processing = int(frame_df["has_detected_processing"].sum()) if frames_checked else 0
+    frames_without_detected_processing = int(frames_checked - frames_with_detected_processing)
+
+    failed_frames = frame_df[
+        frame_df["has_detected_processing"] == False
+    ]["frame_number"].astype(int).tolist() if frames_checked else []
+
+    processing_coverage_percent = round(
+        frames_with_detected_processing * 100.0 / frames_checked,
+        2
+    ) if frames_checked else 0.0
+
+    total_targets_checked = int(len(target_validation_df))
+    targets_covered_count = int(target_validation_df["is_target_covered"].sum()) if total_targets_checked else 0
+    targets_failed_count = int(total_targets_checked - targets_covered_count)
+
+    target_failed_frames = sorted(
+        target_validation_df[
+            target_validation_df["is_target_covered"] == False
+        ]["frame_number"].astype(int).unique().tolist()
+    ) if total_targets_checked else []
+
+    target_coverage_percent = round(
+        targets_covered_count * 100.0 / total_targets_checked,
+        2
+    ) if total_targets_checked else 0.0
+
+    average_target_coverage_ratio = round(
+        float(target_validation_df["best_target_coverage_ratio"].mean()),
+        6
+    ) if total_targets_checked else 0.0
+
+    minimum_target_coverage_ratio = round(
+        float(target_validation_df["best_target_coverage_ratio"].min()),
+        6
+    ) if total_targets_checked else 0.0
+
+    clean_tracks = track_df[
+        track_df["clean_track_status"].astype(str).eq("CLEAN_TRACK")
+    ] if len(track_df) else pd.DataFrame([])
+
+    clean_tracks_with_gaps = clean_tracks[
+        clean_tracks["track_status"].astype(str).eq("HAS_TEMPORAL_GAPS")
+    ] if len(clean_tracks) else pd.DataFrame([])
+
+    clean_track_gap_frames = []
+
+    if len(clean_tracks_with_gaps):
+        for _, row in clean_tracks_with_gaps.iterrows():
+            missing = row["missing_frames"]
+
+            if isinstance(missing, str):
+                try:
+                    missing = json.loads(missing)
+                except Exception:
+                    missing = []
+
+            clean_track_gap_frames.extend([int(x) for x in missing])
+
+    clean_track_gap_frames = sorted(list(set(clean_track_gap_frames)))
+
+    if targets_failed_count > 0:
+        final_result = "FAIL_TARGET_NOT_COVERED"
+        final_reason = "At least one target region was not covered by any accepted processed region."
+    elif EXPECT_PROCESSING_IN_EVERY_FRAME and frames_without_detected_processing > 0:
+        final_result = "FAIL_NO_PROCESSING_IN_REQUIRED_FRAME"
+        final_reason = "At least one required frame had no accepted detected processing."
+    else:
+        final_result = "PASS"
+        final_reason = "All checked target regions were covered."
+
+    severity_scores = region_df["severity_score"].astype(float).tolist() if len(region_df) else []
+
+    summary = {
+        "tool_version": TOOL_VERSION,
+        "case_id": case_id,
+        "processed_video_file_name": processed_video_file_name,
+        "raw_video_info": raw_info,
+        "processed_video_info": processed_info,
+        "target_source_mode": target_mode,
+        "target_source_status": target_source_status,
+        "selected_auto_target_track_id": selected_auto_target_track_id,
+        "final_result": final_result,
+        "final_reason": final_reason,
+        "frame_level_summary": {
+            "frames_checked": frames_checked,
+            "frames_with_detected_processing": frames_with_detected_processing,
+            "frames_without_detected_processing": frames_without_detected_processing,
+            "processing_coverage_percent": processing_coverage_percent,
+            "failed_frame_count": int(len(failed_frames)),
+            "failed_frames": failed_frames
+        },
+        "target_level_summary": {
+            "total_targets_checked": total_targets_checked,
+            "targets_covered_count": targets_covered_count,
+            "targets_failed_count": targets_failed_count,
+            "target_coverage_percent": target_coverage_percent,
+            "target_failed_frames": target_failed_frames,
+            "average_target_coverage_ratio": average_target_coverage_ratio,
+            "minimum_target_coverage_ratio": minimum_target_coverage_ratio
+        },
+        "false_positive_filter_summary": {
+            "total_candidate_regions": int(len(region_df)),
+            "total_accepted_regions": int(len(region_df)),
+            "total_rejected_regions": int(len(rejected_region_df)),
+            "rejection_rate_percent": 0.0
+        },
+        "track_level_summary": {
+            "unique_tracks_count": int(len(track_df)),
+            "clean_tracks_with_gaps_count": int(len(clean_tracks_with_gaps)),
+            "clean_track_gap_frames": clean_track_gap_frames
+        },
+        "severity_summary": {
+            "average_severity_score": round(float(np.mean(severity_scores)), 2) if severity_scores else 0.0,
+            "maximum_severity_score": round(float(np.max(severity_scores)), 2) if severity_scores else 0.0
+        },
+        "outputs": {
+            "output_dir": str(output_dir),
+            "annotated_video": str(output_annotated_video),
+            "frame_report_csv": str(output_frame_report),
+            "region_report_csv": str(output_region_report),
+            "rejected_region_report_csv": str(output_rejected_region_report),
+            "track_report_csv": str(output_track_report),
+            "target_regions_used_csv": str(output_target_regions_used),
+            "target_validation_report_csv": str(output_target_validation_report),
+            "summary_txt": str(output_summary_txt),
+            "summary_json": str(output_summary_json)
+        }
+    }
+
+    summary_text = f"""
+====================================================
+{TOOL_VERSION.upper()} TARGET-AWARE VISUAL PROCESSING VERIFICATION SUMMARY
+====================================================
+
+Case ID:
+{case_id}
+
+Processed video test name:
+{processed_video_file_name}
+
+Final result:
+{final_result}
+
+Final reason:
+{final_reason}
+
+Target source mode:
+{target_mode}
+
+Target source status:
+{target_source_status}
+
+Frames checked:
+{frames_checked}
+
+Frames with detected processing:
+{frames_with_detected_processing}
+
+Frames without detected processing:
+{frames_without_detected_processing}
+
+Processing coverage:
+{processing_coverage_percent} %
+
+Failed frames:
+{failed_frames}
+
+Total targets checked:
+{total_targets_checked}
+
+Targets covered:
+{targets_covered_count}
+
+Targets failed:
+{targets_failed_count}
+
+Target coverage:
+{target_coverage_percent} %
+
+Target failed frames:
+{target_failed_frames}
+
+Unique tracks:
+{int(len(track_df))}
+
+Clean tracks with gaps:
+{int(len(clean_tracks_with_gaps))}
+
+Clean track gap frames:
+{clean_track_gap_frames}
+
+Output directory:
+{output_dir}
+
+Annotated video:
+{output_annotated_video}
+
+Frame report:
+{output_frame_report}
+
+Region report:
+{output_region_report}
+
+Target validation report:
+{output_target_validation_report}
+
+Summary JSON:
+{output_summary_json}
+====================================================
+"""
+
+    output_summary_txt.write_text(summary_text, encoding="utf-8")
+
+    with output_summary_json.open("w", encoding="utf-8") as f:
+        json.dump(convert_for_json(summary), f, indent=4, ensure_ascii=False)
+
+    print("")
+    print("CASE COMPLETED")
+    print(f"Case ID: {case_id}")
+    print(f"Final result: {final_result}")
+    print(f"Target failed frames: {target_failed_frames}")
+    print(f"Output dir: {output_dir}")
+
+    return summary
+
+
+def run_batch(args):
+    cases_csv = Path(args.cases)
+    output_root = Path(args.output)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    batch_summary_csv = output_root / f"{TOOL_VERSION}_batch_summary.csv"
+    batch_summary_json = output_root / f"{TOOL_VERSION}_batch_summary.json"
+    batch_run_log_txt = output_root / f"{TOOL_VERSION}_batch_run_log.txt"
+
+    rows = read_csv_as_dicts(cases_csv)
+
+    validation_rows = [validate_case(row) for row in rows]
+    enabled_rows = [
+        row for row in validation_rows
+        if row["enabled"]
+    ]
+
+    error_rows = [
+        row for row in enabled_rows
+        if row["validation_status"] == "ERROR"
+    ]
+
+    print("====================================================")
+    print(f"{TOOL_VERSION.upper()} CLI BATCH RUN")
+    print("====================================================")
+    print(f"Cases CSV: {cases_csv}")
+    print(f"Output root: {output_root}")
+    print(f"Total cases in CSV: {len(validation_rows)}")
+    print(f"Enabled cases: {len(enabled_rows)}")
+    print(f"Error enabled cases: {len(error_rows)}")
+
+    if error_rows:
+        print("")
+        print("Batch config has errors. Fix them before running.")
+        for row in error_rows:
+            print(f"- {row['case_id']}: {row['errors']}")
+        return 1
+
+    if args.dry_run and not args.run:
+        print("")
+        print("Dry run only. All enabled cases are ready.")
+        return 0
+
+    batch_rows = []
+    batch_log_lines = []
+
+    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    for original_row in rows:
+        if not normalize_bool(original_row.get("enabled", "")):
+            continue
+
+        case_id = str(original_row["case_id"])
+
+        case_result_row = {
+            "case_id": case_id,
+            "case_status": "UNKNOWN",
+            "error_message": "",
+            "final_result": "",
+            "final_reason": "",
+            "frames_checked": 0,
+            "processing_coverage_percent": 0.0,
+            "total_targets_checked": 0,
+            "target_coverage_percent": 0.0,
+            "target_failed_frames": [],
+            "output_dir": ""
+        }
+
+        try:
+            case_summary = run_single_case(original_row, output_root)
+
+            case_result_row["case_status"] = "COMPLETED"
+            case_result_row["final_result"] = case_summary["final_result"]
+            case_result_row["final_reason"] = case_summary["final_reason"]
+            case_result_row["frames_checked"] = case_summary["frame_level_summary"]["frames_checked"]
+            case_result_row["processing_coverage_percent"] = case_summary["frame_level_summary"]["processing_coverage_percent"]
+            case_result_row["total_targets_checked"] = case_summary["target_level_summary"]["total_targets_checked"]
+            case_result_row["target_coverage_percent"] = case_summary["target_level_summary"]["target_coverage_percent"]
+            case_result_row["target_failed_frames"] = case_summary["target_level_summary"]["target_failed_frames"]
+            case_result_row["output_dir"] = case_summary["outputs"]["output_dir"]
+
+            batch_log_lines.append(
+                f"[COMPLETED] {case_id} | {case_result_row['final_result']} | failed={case_result_row['target_failed_frames']}"
+            )
+
+        except Exception as e:
+            case_result_row["case_status"] = "ERROR"
+            case_result_row["error_message"] = str(e)
+            batch_log_lines.append(f"[ERROR] {case_id} | {str(e)}")
+
+            print("")
+            print("CASE ERROR")
+            print(f"Case ID: {case_id}")
+            print(f"Error: {e}")
+
+        batch_rows.append(case_result_row)
+
+    batch_rows_for_csv = []
+
+    for row in batch_rows:
+        csv_row = row.copy()
+        csv_row["target_failed_frames"] = json.dumps(
+            csv_row["target_failed_frames"],
+            ensure_ascii=False
+        )
+        batch_rows_for_csv.append(csv_row)
+
+    write_csv_dicts(batch_rows_for_csv, batch_summary_csv)
+
+    batch_summary_json_data = {
+        "tool_version": TOOL_VERSION,
+        "started_at": started_at,
+        "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "cases_csv": str(cases_csv),
+        "output_root": str(output_root),
+        "enabled_case_count": len(enabled_rows),
+        "completed_case_count": len([
+            row for row in batch_rows
+            if row["case_status"] == "COMPLETED"
+        ]),
+        "error_case_count": len([
+            row for row in batch_rows
+            if row["case_status"] == "ERROR"
+        ]),
+        "case_results": batch_rows,
+        "outputs": {
+            "batch_summary_csv": str(batch_summary_csv),
+            "batch_summary_json": str(batch_summary_json),
+            "batch_run_log_txt": str(batch_run_log_txt)
+        }
+    }
+
+    with batch_summary_json.open("w", encoding="utf-8") as f:
+        json.dump(convert_for_json(batch_summary_json_data), f, indent=4, ensure_ascii=False)
+
+    batch_run_log_txt.write_text("\n".join(batch_log_lines), encoding="utf-8")
+
+    print("")
+    print("====================================================")
+    print(f"{TOOL_VERSION.upper()} BATCH SUMMARY")
+    print("====================================================")
+    print(f"Completed cases: {batch_summary_json_data['completed_case_count']}")
+    print(f"Error cases: {batch_summary_json_data['error_case_count']}")
+    print("")
+    print("Batch summary CSV:")
+    print(batch_summary_csv)
+    print("")
+    print("Batch summary JSON:")
+    print(batch_summary_json)
+    print("")
+    print("Batch run log:")
+    print(batch_run_log_txt)
+
+    return 0
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="visual_verify_cli_v5_0b",
+        description="Target-aware visual processing verification CLI"
+    )
+
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True
+    )
+
+    batch_parser = subparsers.add_parser(
+        "batch",
+        help="Run batch video verification cases"
+    )
+
+    batch_parser.add_argument(
+        "--cases",
+        required=True,
+        help="Path to batch cases CSV"
+    )
+
+    batch_parser.add_argument(
+        "--output",
+        required=True,
+        help="Output directory for CLI batch results"
+    )
+
+    batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate config only"
+    )
+
+    batch_parser.add_argument(
+        "--run",
+        action="store_true",
+        help="Actually run video verification"
+    )
+
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.command == "batch":
+        return run_batch(args)
+
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+
+#================================================================
+# README CONTENT
+#================================================================
+
+readme_text = (
+    "# V5.0b CLI Batch Runner\n\n"
+    "V5.0b is the first CLI version that actually runs video verification.\n\n"
+    "It reads the batch cases CSV, validates enabled cases, processes each video pair, "
+    "runs target-aware validation, and writes case-level and batch-level reports.\n\n"
+    "Example command:\n\n"
+    f"python \"{CLI_SCRIPT_PATH}\" batch --cases \"{BATCH_CASES_CSV}\" --output \"{CLI_OUTPUT_DIR}\" --run\n\n"
+    "Expected output root:\n\n"
+    f"{CLI_OUTPUT_DIR}\n\n"
+    "This version is still a single-file CLI script. "
+    "V5.1 will turn the logic into a cleaner Python package structure.\n"
+)
+
+
+#================================================================
+# RUN FILES
+#================================================================
+
+python_executable = sys.executable
+
+bat_text = (
+    "@echo off\n"
+    f"\"{python_executable}\" \"{CLI_SCRIPT_PATH}\" batch "
+    f"--cases \"{BATCH_CASES_CSV}\" "
+    f"--output \"{CLI_OUTPUT_DIR}\" "
+    "--run\n"
+    "pause\n"
+)
+
+ps1_text = (
+    f"& \"{python_executable}\" \"{CLI_SCRIPT_PATH}\" batch "
+    f"--cases \"{BATCH_CASES_CSV}\" "
+    f"--output \"{CLI_OUTPUT_DIR}\" "
+    "--run\n"
+)
+
+
+#================================================================
+# WRITE FILES
+#================================================================
+
+CLI_SCRIPT_PATH.write_text(cli_script, encoding="utf-8")
+CLI_README_PATH.write_text(readme_text, encoding="utf-8")
+CLI_RUN_BAT_PATH.write_text(bat_text, encoding="utf-8")
+CLI_RUN_PS1_PATH.write_text(ps1_text, encoding="utf-8")
+
+
+#================================================================
+# TEST V5.0b CLI FROM NOTEBOOK
+#================================================================
+
+print("====================================================")
+print("V5.0b CLI FILES CREATED")
+print("====================================================")
+print(f"CLI script: {CLI_SCRIPT_PATH}")
+print(f"README: {CLI_README_PATH}")
+print(f"BAT runner: {CLI_RUN_BAT_PATH}")
+print(f"PowerShell runner: {CLI_RUN_PS1_PATH}")
+
+print("\n====================================================")
+print("RUNNING V5.0b CLI BATCH TEST")
+print("====================================================")
+
+cmd = [
+    python_executable,
+    str(CLI_SCRIPT_PATH),
+    "batch",
+    "--cases",
+    str(BATCH_CASES_CSV),
+    "--output",
+    str(CLI_OUTPUT_DIR),
+    "--run"
+]
+
+print("Command:")
+print(" ".join([f'"{x}"' if " " in x else x for x in cmd]))
+
+result = subprocess.run(
+    cmd,
+    capture_output=True,
+    text=True
+)
+
+print("\nSTDOUT:")
+print(result.stdout)
+
+print("\nSTDERR:")
+print(result.stderr)
+
+print("\nReturn code:")
+print(result.returncode)
+
+if result.returncode != 0:
+    raise RuntimeError(
+        "V5.0b CLI batch run failed. Check STDERR above."
+    )
+
+print("\n====================================================")
+print("V5.0b COMPLETED SUCCESSFULLY")
+print("====================================================")
+print("Generated CLI run output folder:")
+print(CLI_OUTPUT_DIR)

@@ -1,0 +1,516 @@
+#================================================================
+# V5.0a - CLI Project Skeleton + Batch Config Validator
+#================================================================
+# Purpose:
+#   1. Create a clean CLI project folder
+#   2. Create visual_verify_cli.py
+#   3. Add a "batch" command skeleton
+#   4. Validate v4_0_batch_cases.csv from terminal-style CLI
+#   5. Generate CLI validation outputs
+#
+# Important:
+#   V5.0a does NOT run the full video verification yet.
+#   It prepares the command-line interface foundation.
+#
+# Next:
+#   V5.0b will move the V4.0 batch runner logic into the CLI script.
+#================================================================
+
+import os
+import sys
+import json
+import subprocess
+from pathlib import Path
+
+
+#================================================================
+# PROJECT PATHS
+#================================================================
+
+PROJECT_ROOT = Path(r"C:\work_tickets\blur_detect_v2")
+
+CLI_PROJECT_DIR = PROJECT_ROOT / "visual_verifier_cli"
+
+CLI_SCRIPT_PATH = CLI_PROJECT_DIR / "visual_verify_cli.py"
+CLI_README_PATH = CLI_PROJECT_DIR / "README_V5_0a.md"
+CLI_REQUIREMENTS_PATH = CLI_PROJECT_DIR / "requirements_v5_0a.txt"
+CLI_RUN_BAT_PATH = CLI_PROJECT_DIR / "run_v5_0a_validate.bat"
+CLI_RUN_PS1_PATH = CLI_PROJECT_DIR / "run_v5_0a_validate.ps1"
+
+BATCH_CASES_CSV = PROJECT_ROOT / "input" / "v4_0_batch_cases.csv"
+
+CLI_OUTPUT_DIR = PROJECT_ROOT / "output" / "cli_runs" / "v5_0a_validation"
+
+CLI_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+CLI_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+#================================================================
+# CLI SCRIPT CONTENT
+#================================================================
+
+cli_script = r'''
+#================================================================
+# visual_verify_cli.py
+#================================================================
+# V5.0a - CLI Skeleton + Batch Config Validator
+#
+# This script validates a batch cases CSV from the command line.
+# It does not run full video verification yet.
+#
+# Example:
+#   python visual_verify_cli.py batch --cases C:\work_tickets\blur_detect_v2\input\v4_0_batch_cases.csv --output C:\work_tickets\blur_detect_v2\output\cli_runs\v5_0a_validation
+#================================================================
+
+import argparse
+import csv
+import json
+import sys
+from pathlib import Path
+from datetime import datetime
+
+
+TOOL_VERSION = "v5_0a"
+
+
+REQUIRED_BATCH_COLUMNS = [
+    "enabled",
+    "case_id",
+    "processed_video_file_name",
+    "raw_video_path",
+    "processed_video_path",
+    "target_region_source_mode",
+    "manual_target_regions_csv_path"
+]
+
+
+SUPPORTED_TARGET_MODES = [
+    "MANUAL_CSV",
+    "AUTO_BOOTSTRAP_FROM_BEST_TRACK"
+]
+
+
+def normalize_bool(value):
+    return str(value).strip().lower() in ["true", "1", "yes", "y"]
+
+
+def read_csv_as_dicts(csv_path):
+    csv_path = Path(csv_path)
+
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Cases CSV not found: {csv_path}")
+
+    rows = []
+
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+
+        fieldnames = reader.fieldnames or []
+
+        missing_columns = [
+            column for column in REQUIRED_BATCH_COLUMNS
+            if column not in fieldnames
+        ]
+
+        if missing_columns:
+            raise ValueError(
+                "Cases CSV is missing required columns: "
+                + ", ".join(missing_columns)
+            )
+
+        for row in reader:
+            rows.append(row)
+
+    return rows
+
+
+def validate_case(row):
+    case_id = str(row.get("case_id", "")).strip()
+    processed_video_file_name = str(row.get("processed_video_file_name", "")).strip()
+    raw_video_path = Path(str(row.get("raw_video_path", "")).strip())
+    processed_video_path = Path(str(row.get("processed_video_path", "")).strip())
+    target_region_source_mode = str(row.get("target_region_source_mode", "")).strip()
+    manual_target_regions_csv_path = Path(
+        str(row.get("manual_target_regions_csv_path", "")).strip()
+    )
+
+    errors = []
+    warnings = []
+
+    if not case_id:
+        errors.append("case_id is empty")
+
+    if not processed_video_file_name:
+        errors.append("processed_video_file_name is empty")
+
+    if not raw_video_path.exists():
+        errors.append(f"raw_video_path does not exist: {raw_video_path}")
+
+    if not processed_video_path.exists():
+        errors.append(f"processed_video_path does not exist: {processed_video_path}")
+
+    if target_region_source_mode not in SUPPORTED_TARGET_MODES:
+        errors.append(
+            f"Unsupported target_region_source_mode: {target_region_source_mode}"
+        )
+
+    if target_region_source_mode == "MANUAL_CSV":
+        if not str(manual_target_regions_csv_path).strip():
+            errors.append("manual_target_regions_csv_path is empty for MANUAL_CSV mode")
+        elif not manual_target_regions_csv_path.exists():
+            errors.append(
+                f"manual_target_regions_csv_path does not exist: "
+                f"{manual_target_regions_csv_path}"
+            )
+
+    if target_region_source_mode == "AUTO_BOOTSTRAP_FROM_BEST_TRACK":
+        if str(manual_target_regions_csv_path).strip():
+            warnings.append(
+                "manual_target_regions_csv_path is provided but ignored in AUTO_BOOTSTRAP mode"
+            )
+
+    if errors:
+        validation_status = "ERROR"
+    else:
+        validation_status = "READY_TO_RUN"
+
+    return {
+        "case_id": case_id,
+        "processed_video_file_name": processed_video_file_name,
+        "enabled": normalize_bool(row.get("enabled", "")),
+        "target_region_source_mode": target_region_source_mode,
+        "raw_video_path": str(raw_video_path),
+        "processed_video_path": str(processed_video_path),
+        "manual_target_regions_csv_path": str(manual_target_regions_csv_path),
+        "validation_status": validation_status,
+        "error_count": len(errors),
+        "warning_count": len(warnings),
+        "errors": errors,
+        "warnings": warnings
+    }
+
+
+def write_csv(rows, output_csv):
+    output_csv = Path(output_csv)
+
+    if not rows:
+        output_csv.write_text("", encoding="utf-8")
+        return
+
+    fieldnames = list(rows[0].keys())
+
+    with output_csv.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for row in rows:
+            csv_row = {}
+
+            for key, value in row.items():
+                if isinstance(value, (list, dict)):
+                    csv_row[key] = json.dumps(value, ensure_ascii=False)
+                else:
+                    csv_row[key] = value
+
+            writer.writerow(csv_row)
+
+
+def run_batch_validation(args):
+    cases_csv = Path(args.cases)
+    output_dir = Path(args.output)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    validation_summary_csv = output_dir / f"{TOOL_VERSION}_cli_batch_validation_summary.csv"
+    validation_summary_json = output_dir / f"{TOOL_VERSION}_cli_batch_validation_summary.json"
+    validation_log_txt = output_dir / f"{TOOL_VERSION}_cli_batch_validation_log.txt"
+
+    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    print("====================================================")
+    print(f"{TOOL_VERSION.upper()} CLI BATCH CONFIG VALIDATION")
+    print("====================================================")
+    print(f"Cases CSV: {cases_csv}")
+    print(f"Output dir: {output_dir}")
+    print(f"Started at: {started_at}")
+
+    rows = read_csv_as_dicts(cases_csv)
+
+    validation_rows = []
+
+    for row in rows:
+        case_validation = validate_case(row)
+        validation_rows.append(case_validation)
+
+    enabled_rows = [row for row in validation_rows if row["enabled"]]
+    ready_rows = [
+        row for row in enabled_rows
+        if row["validation_status"] == "READY_TO_RUN"
+    ]
+    error_rows = [
+        row for row in enabled_rows
+        if row["validation_status"] == "ERROR"
+    ]
+
+    write_csv(validation_rows, validation_summary_csv)
+
+    summary_json = {
+        "tool_version": TOOL_VERSION,
+        "command": "batch",
+        "mode": "config_validation_only",
+        "cases_csv": str(cases_csv),
+        "output_dir": str(output_dir),
+        "started_at": started_at,
+        "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "total_cases_in_csv": len(validation_rows),
+        "enabled_cases": len(enabled_rows),
+        "ready_enabled_cases": len(ready_rows),
+        "error_enabled_cases": len(error_rows),
+        "validation_rows": validation_rows,
+        "outputs": {
+            "validation_summary_csv": str(validation_summary_csv),
+            "validation_summary_json": str(validation_summary_json),
+            "validation_log_txt": str(validation_log_txt)
+        }
+    }
+
+    with validation_summary_json.open("w", encoding="utf-8") as f:
+        json.dump(summary_json, f, indent=4, ensure_ascii=False)
+
+    log_lines = []
+    log_lines.append("====================================================")
+    log_lines.append(f"{TOOL_VERSION.upper()} CLI BATCH CONFIG VALIDATION LOG")
+    log_lines.append("====================================================")
+    log_lines.append(f"Cases CSV: {cases_csv}")
+    log_lines.append(f"Output dir: {output_dir}")
+    log_lines.append(f"Total cases in CSV: {len(validation_rows)}")
+    log_lines.append(f"Enabled cases: {len(enabled_rows)}")
+    log_lines.append(f"Ready enabled cases: {len(ready_rows)}")
+    log_lines.append(f"Error enabled cases: {len(error_rows)}")
+    log_lines.append("")
+
+    for row in validation_rows:
+        log_lines.append(
+            f"[{row['validation_status']}] "
+            f"{row['case_id']} | "
+            f"enabled={row['enabled']} | "
+            f"target_mode={row['target_region_source_mode']}"
+        )
+
+        for error in row["errors"]:
+            log_lines.append(f"  ERROR: {error}")
+
+        for warning in row["warnings"]:
+            log_lines.append(f"  WARNING: {warning}")
+
+        log_lines.append("")
+
+    validation_log_txt.write_text("\n".join(log_lines), encoding="utf-8")
+
+    print("")
+    print("Validation result:")
+    print(f"Total cases in CSV: {len(validation_rows)}")
+    print(f"Enabled cases: {len(enabled_rows)}")
+    print(f"Ready enabled cases: {len(ready_rows)}")
+    print(f"Error enabled cases: {len(error_rows)}")
+    print("")
+    print("Outputs:")
+    print(f"Validation CSV: {validation_summary_csv}")
+    print(f"Validation JSON: {validation_summary_json}")
+    print(f"Validation log: {validation_log_txt}")
+
+    if error_rows:
+        print("")
+        print("One or more enabled cases have errors.")
+        return 1
+
+    print("")
+    print("All enabled cases are ready to run in the future V5.0b CLI engine.")
+    return 0
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="visual_verify_cli",
+        description="Target-aware visual processing verification CLI"
+    )
+
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True
+    )
+
+    batch_parser = subparsers.add_parser(
+        "batch",
+        help="Validate or run batch video verification cases"
+    )
+
+    batch_parser.add_argument(
+        "--cases",
+        required=True,
+        help="Path to batch cases CSV"
+    )
+
+    batch_parser.add_argument(
+        "--output",
+        required=True,
+        help="Output directory for CLI results"
+    )
+
+    batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate config only. In V5.0a, all runs are validation-only."
+    )
+
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.command == "batch":
+        return run_batch_validation(args)
+
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+
+#================================================================
+# README CONTENT
+#================================================================
+
+readme_text = (
+    "# V5.0a CLI Skeleton\n\n"
+    "This folder contains the first command-line interface skeleton for the visual processing verification toolkit.\n\n"
+    "## What V5.0a does\n\n"
+    "V5.0a validates a batch cases CSV from the terminal.\n\n"
+    "It checks:\n\n"
+    "- required columns\n"
+    "- enabled cases\n"
+    "- raw video path exists\n"
+    "- processed video path exists\n"
+    "- target mode is supported\n"
+    "- manual target CSV exists when MANUAL_CSV mode is used\n\n"
+    "## What V5.0a does not do yet\n\n"
+    "V5.0a does not run the full visual verification engine yet.\n\n"
+    "That will come in V5.0b.\n\n"
+    "## Example command\n\n"
+    f"python \"{CLI_SCRIPT_PATH}\" batch --cases \"{BATCH_CASES_CSV}\" --output \"{CLI_OUTPUT_DIR}\" --dry-run\n\n"
+    "## Existing batch cases file\n\n"
+    f"{BATCH_CASES_CSV}\n\n"
+    "## CLI validation output folder\n\n"
+    f"{CLI_OUTPUT_DIR}\n\n"
+    "## Next step\n\n"
+    "V5.0b will move the V4.0 batch runner into the CLI script.\n"
+)
+
+
+#================================================================
+# REQUIREMENTS CONTENT
+#================================================================
+
+requirements_text = (
+    "opencv-python\n"
+    "numpy\n"
+    "pandas\n"
+)
+
+
+#================================================================
+# RUN FILES
+#================================================================
+
+python_executable = sys.executable
+
+bat_text = (
+    "@echo off\n"
+    f"\"{python_executable}\" \"{CLI_SCRIPT_PATH}\" batch "
+    f"--cases \"{BATCH_CASES_CSV}\" "
+    f"--output \"{CLI_OUTPUT_DIR}\" "
+    "--dry-run\n"
+    "pause\n"
+)
+
+ps1_text = (
+    f"& \"{python_executable}\" \"{CLI_SCRIPT_PATH}\" batch "
+    f"--cases \"{BATCH_CASES_CSV}\" "
+    f"--output \"{CLI_OUTPUT_DIR}\" "
+    "--dry-run\n"
+)
+
+
+#================================================================
+# WRITE FILES
+#================================================================
+
+CLI_SCRIPT_PATH.write_text(cli_script, encoding="utf-8")
+CLI_README_PATH.write_text(readme_text, encoding="utf-8")
+CLI_REQUIREMENTS_PATH.write_text(requirements_text, encoding="utf-8")
+CLI_RUN_BAT_PATH.write_text(bat_text, encoding="utf-8")
+CLI_RUN_PS1_PATH.write_text(ps1_text, encoding="utf-8")
+
+
+#================================================================
+# TEST CLI VALIDATION FROM NOTEBOOK
+#================================================================
+
+print("====================================================")
+print("V5.0a CLI FILES CREATED")
+print("====================================================")
+print(f"CLI project folder: {CLI_PROJECT_DIR}")
+print(f"CLI script: {CLI_SCRIPT_PATH}")
+print(f"README: {CLI_README_PATH}")
+print(f"Requirements: {CLI_REQUIREMENTS_PATH}")
+print(f"BAT runner: {CLI_RUN_BAT_PATH}")
+print(f"PowerShell runner: {CLI_RUN_PS1_PATH}")
+
+print("\n====================================================")
+print("RUNNING V5.0a CLI VALIDATION TEST")
+print("====================================================")
+
+cmd = [
+    python_executable,
+    str(CLI_SCRIPT_PATH),
+    "batch",
+    "--cases",
+    str(BATCH_CASES_CSV),
+    "--output",
+    str(CLI_OUTPUT_DIR),
+    "--dry-run"
+]
+
+print("Command:")
+print(" ".join([f'"{x}"' if " " in x else x for x in cmd]))
+
+result = subprocess.run(
+    cmd,
+    capture_output=True,
+    text=True
+)
+
+print("\nSTDOUT:")
+print(result.stdout)
+
+print("\nSTDERR:")
+print(result.stderr)
+
+print("\nReturn code:")
+print(result.returncode)
+
+if result.returncode != 0:
+    raise RuntimeError(
+        "V5.0a CLI validation test failed. Check STDERR above."
+    )
+
+print("\n====================================================")
+print("V5.0a COMPLETED SUCCESSFULLY")
+print("====================================================")
+print("Generated CLI validation output folder:")
+print(CLI_OUTPUT_DIR)

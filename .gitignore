@@ -1,0 +1,68 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Virtual environments and local tooling
+.venv/
+venv/
+env/
+.tox/
+.nox/
+.release-venv/
+
+# Packaging and build artifacts
+*.egg-info/
+build/
+dist/
+site/
+*.whl
+*.tar.gz
+
+# Test and quality reports
+junit.xml
+pytest-report.xml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDEs and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local.yaml
+*.local.yml
+*.local.toml
+
+# Generated verification outputs
+output/
+outputs/
+reports/generated/
+examples/outputs/*
+!examples/outputs/.gitkeep
+
+# Temporary media products
+*_annotated.mp4
+*_processed_frame_*.png
+*_raw_frame_*.png
+*_crop_*.png
+
+# Logs and private datasets
+*.log
+datasets/
+private_data/

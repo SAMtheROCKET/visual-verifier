@@ -1,0 +1,419 @@
+#================================================================
+# V5.1a - Python Package Skeleton + Module CLI Wrapper
+#================================================================
+# Purpose:
+#   1. Create proper Python package structure
+#   2. Add module-based CLI entrypoint: python -m visual_verifier.cli
+#   3. Keep functionality safely delegated to working V5.0b CLI
+#   4. Prepare for V5.1b modular refactor
+#
+# Important:
+#   V5.1a does NOT yet move all engine logic into modules.
+#   It creates the package foundation and proves the package-style CLI works.
+#================================================================
+
+import os
+import sys
+import shutil
+import subprocess
+from pathlib import Path
+
+
+#================================================================
+# PROJECT PATHS
+#================================================================
+
+PROJECT_ROOT = Path(r"C:\work_tickets\blur_detect_v2")
+
+PACKAGE_DIR = PROJECT_ROOT / "visual_verifier"
+EXAMPLES_DIR = PROJECT_ROOT / "examples"
+CLI_LEGACY_DIR = PROJECT_ROOT / "visual_verifier_cli"
+
+LEGACY_V5_0B_CLI = CLI_LEGACY_DIR / "visual_verify_cli_v5_0b.py"
+
+BATCH_CASES_CSV = PROJECT_ROOT / "input" / "v4_0_batch_cases.csv"
+
+V5_1A_OUTPUT_DIR = PROJECT_ROOT / "output" / "cli_runs" / "v5_1a_run"
+
+PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
+PACKAGE_README_PATH = PROJECT_ROOT / "README_V5_1a_PACKAGE.md"
+REQUIREMENTS_PATH = PROJECT_ROOT / "requirements.txt"
+
+RUN_PS1_PATH = PROJECT_ROOT / "run_v5_1a_module_cli.ps1"
+RUN_BAT_PATH = PROJECT_ROOT / "run_v5_1a_module_cli.bat"
+
+EXAMPLE_BATCH_CASES_CSV = EXAMPLES_DIR / "v4_0_batch_cases.example.csv"
+
+PACKAGE_DIR.mkdir(parents=True, exist_ok=True)
+EXAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+V5_1A_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+#================================================================
+# SAFETY CHECK
+#================================================================
+
+if not LEGACY_V5_0B_CLI.exists():
+    raise FileNotFoundError(
+        f"V5.0b CLI script not found:\n{LEGACY_V5_0B_CLI}\n\n"
+        "Run V5.0b first before creating V5.1a package wrapper."
+    )
+
+if not BATCH_CASES_CSV.exists():
+    raise FileNotFoundError(
+        f"Batch cases CSV not found:\n{BATCH_CASES_CSV}\n\n"
+        "Run V4.0 first to create v4_0_batch_cases.csv."
+    )
+
+
+#================================================================
+# PACKAGE FILE CONTENTS
+#================================================================
+
+init_py = (
+    '"""Target-aware visual processing verification toolkit."""\n\n'
+    '__version__ = "5.1a"\n'
+)
+
+cli_py = r'''
+"""
+visual_verifier.cli
+
+V5.1a package CLI wrapper.
+
+This module delegates to the already-working V5.0b single-file CLI.
+
+Usage:
+    python -m visual_verifier.cli batch --cases <cases.csv> --output <output_dir> --run
+
+Reason for this bridge:
+    V5.0b proved the CLI engine works.
+    V5.1a creates a package entrypoint without breaking the working engine.
+    V5.1b will move the engine logic into package modules.
+"""
+
+import runpy
+import sys
+from pathlib import Path
+
+
+def main():
+    package_file = Path(__file__).resolve()
+    project_root = package_file.parents[1]
+
+    legacy_cli = (
+        project_root
+        / "visual_verifier_cli"
+        / "visual_verify_cli_v5_0b.py"
+    )
+
+    if not legacy_cli.exists():
+        print("ERROR: Legacy V5.0b CLI script was not found.")
+        print(f"Expected path: {legacy_cli}")
+        return 1
+
+    original_argv = sys.argv[:]
+
+    sys.argv = [str(legacy_cli)] + sys.argv[1:]
+
+    try:
+        runpy.run_path(str(legacy_cli), run_name="__main__")
+    except SystemExit as exc:
+        if isinstance(exc.code, int):
+            return exc.code
+        if exc.code is None:
+            return 0
+        return 1
+    finally:
+        sys.argv = original_argv
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+config_py = r'''
+"""
+Configuration helpers for the visual verifier package.
+
+V5.1a placeholder:
+    Full config loading will be moved here in V5.1b.
+"""
+
+from pathlib import Path
+
+
+REQUIRED_BATCH_COLUMNS = [
+    "enabled",
+    "case_id",
+    "processed_video_file_name",
+    "raw_video_path",
+    "processed_video_path",
+    "target_region_source_mode",
+    "manual_target_regions_csv_path",
+]
+
+
+SUPPORTED_TARGET_MODES = [
+    "MANUAL_CSV",
+    "AUTO_BOOTSTRAP_FROM_BEST_TRACK",
+]
+
+
+def normalize_bool(value):
+    return str(value).strip().lower() in ["true", "1", "yes", "y"]
+
+
+def as_path(value):
+    return Path(str(value)).expanduser()
+'''
+
+io_utils_py = r'''
+"""
+I/O utility helpers.
+
+V5.1a placeholder:
+    CSV, JSON, folder, and path helpers will be moved here in V5.1b.
+"""
+
+import json
+from pathlib import Path
+
+
+def ensure_dir(path):
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def write_json(data, path):
+    path = Path(path)
+    ensure_dir(path.parent)
+
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False, default=str)
+
+    return path
+'''
+
+video_info_py = r'''
+"""
+Video metadata helpers.
+
+V5.1a placeholder:
+    get_video_info and frame extraction helpers will be moved here in V5.1b.
+"""
+'''
+
+detection_py = r'''
+"""
+Pixel-difference and processed-region detection logic.
+
+V5.1a placeholder:
+    detect_candidate_regions and severity scoring will be moved here in V5.1b.
+"""
+'''
+
+tracking_py = r'''
+"""
+Temporal tracking logic.
+
+V5.1a placeholder:
+    IoU track assignment and track report logic will be moved here in V5.1b.
+"""
+'''
+
+target_validation_py = r'''
+"""
+Target-aware validation logic.
+
+V5.1a placeholder:
+    manual target loading and target coverage validation will be moved here in V5.1b.
+"""
+'''
+
+reporting_py = r'''
+"""
+Reporting and annotation logic.
+
+V5.1a placeholder:
+    annotated frame/video generation and summary reports will be moved here in V5.1b.
+"""
+'''
+
+batch_py = r'''
+"""
+Batch runner logic.
+
+V5.1a placeholder:
+    V5.0b batch runner will be moved here in V5.1b.
+"""
+'''
+
+pyproject_text = (
+    "[build-system]\n"
+    'requires = ["setuptools>=68", "wheel"]\n'
+    'build-backend = "setuptools.build_meta"\n\n'
+    "[project]\n"
+    'name = "visual-verifier"\n'
+    'version = "0.5.1a"\n'
+    'description = "Target-aware visual processing verification toolkit"\n'
+    'readme = "README_V5_1a_PACKAGE.md"\n'
+    'requires-python = ">=3.9"\n'
+    'authors = [{name = "Sambit Dash"}]\n'
+    "dependencies = [\n"
+    '    "opencv-python",\n'
+    '    "numpy",\n'
+    '    "pandas"\n'
+    "]\n\n"
+    "[project.scripts]\n"
+    'visual-verifier = "visual_verifier.cli:main"\n\n'
+    "[tool.setuptools.packages.find]\n"
+    'where = ["."]\n'
+    'include = ["visual_verifier*"]\n'
+)
+
+requirements_text = (
+    "opencv-python\n"
+    "numpy\n"
+    "pandas\n"
+)
+
+readme_text = (
+    "# Visual Verifier - V5.1a Package Skeleton\n\n"
+    "This is the first package-structured version of the target-aware visual processing verification toolkit.\n\n"
+    "## What works in V5.1a\n\n"
+    "- Package folder exists: visual_verifier/\n"
+    "- Module CLI exists: python -m visual_verifier.cli\n"
+    "- Project metadata exists: pyproject.toml\n"
+    "- Console entrypoint is prepared: visual-verifier\n"
+    "- The package CLI delegates safely to the working V5.0b CLI engine\n\n"
+    "## Why V5.1a delegates to V5.0b\n\n"
+    "V5.0b already proved that terminal-based batch verification works. "
+    "V5.1a creates the package structure without breaking the working CLI engine. "
+    "In V5.1b, the V5.0b single-file logic will be moved into package modules.\n\n"
+    "## Module CLI command\n\n"
+    f"python -m visual_verifier.cli batch --cases \"{BATCH_CASES_CSV}\" --output \"{V5_1A_OUTPUT_DIR}\" --run\n\n"
+    "## Optional editable install\n\n"
+    "From the project root, run:\n\n"
+    "python -m pip install -e .\n\n"
+    "Then you can run:\n\n"
+    f"visual-verifier batch --cases \"{BATCH_CASES_CSV}\" --output \"{V5_1A_OUTPUT_DIR}\" --run\n\n"
+    "## Next step\n\n"
+    "V5.1b will move actual engine logic into modules such as detection.py, tracking.py, target_validation.py, reporting.py, and batch.py.\n"
+)
+
+
+#================================================================
+# WRITE PACKAGE FILES
+#================================================================
+
+(PACKAGE_DIR / "__init__.py").write_text(init_py, encoding="utf-8")
+(PACKAGE_DIR / "cli.py").write_text(cli_py, encoding="utf-8")
+(PACKAGE_DIR / "config.py").write_text(config_py, encoding="utf-8")
+(PACKAGE_DIR / "io_utils.py").write_text(io_utils_py, encoding="utf-8")
+(PACKAGE_DIR / "video_info.py").write_text(video_info_py, encoding="utf-8")
+(PACKAGE_DIR / "detection.py").write_text(detection_py, encoding="utf-8")
+(PACKAGE_DIR / "tracking.py").write_text(tracking_py, encoding="utf-8")
+(PACKAGE_DIR / "target_validation.py").write_text(target_validation_py, encoding="utf-8")
+(PACKAGE_DIR / "reporting.py").write_text(reporting_py, encoding="utf-8")
+(PACKAGE_DIR / "batch.py").write_text(batch_py, encoding="utf-8")
+
+PYPROJECT_PATH.write_text(pyproject_text, encoding="utf-8")
+PACKAGE_README_PATH.write_text(readme_text, encoding="utf-8")
+REQUIREMENTS_PATH.write_text(requirements_text, encoding="utf-8")
+
+shutil.copyfile(BATCH_CASES_CSV, EXAMPLE_BATCH_CASES_CSV)
+
+
+#================================================================
+# RUNNER FILES
+#================================================================
+
+python_executable = sys.executable
+
+ps1_text = (
+    f"cd \"{PROJECT_ROOT}\"\n"
+    f"& \"{python_executable}\" -m visual_verifier.cli batch "
+    f"--cases \"{BATCH_CASES_CSV}\" "
+    f"--output \"{V5_1A_OUTPUT_DIR}\" "
+    "--run\n"
+)
+
+bat_text = (
+    "@echo off\n"
+    f"cd /d \"{PROJECT_ROOT}\"\n"
+    f"\"{python_executable}\" -m visual_verifier.cli batch "
+    f"--cases \"{BATCH_CASES_CSV}\" "
+    f"--output \"{V5_1A_OUTPUT_DIR}\" "
+    "--run\n"
+    "pause\n"
+)
+
+RUN_PS1_PATH.write_text(ps1_text, encoding="utf-8")
+RUN_BAT_PATH.write_text(bat_text, encoding="utf-8")
+
+
+#================================================================
+# TEST PACKAGE MODULE CLI
+#================================================================
+
+print("====================================================")
+print("V5.1a PACKAGE FILES CREATED")
+print("====================================================")
+print(f"Package dir: {PACKAGE_DIR}")
+print(f"Package CLI: {PACKAGE_DIR / 'cli.py'}")
+print(f"pyproject.toml: {PYPROJECT_PATH}")
+print(f"README: {PACKAGE_README_PATH}")
+print(f"requirements.txt: {REQUIREMENTS_PATH}")
+print(f"Example cases CSV: {EXAMPLE_BATCH_CASES_CSV}")
+print(f"PowerShell runner: {RUN_PS1_PATH}")
+print(f"BAT runner: {RUN_BAT_PATH}")
+
+print("\n====================================================")
+print("RUNNING V5.1a MODULE CLI TEST")
+print("====================================================")
+
+cmd = [
+    python_executable,
+    "-m",
+    "visual_verifier.cli",
+    "batch",
+    "--cases",
+    str(BATCH_CASES_CSV),
+    "--output",
+    str(V5_1A_OUTPUT_DIR),
+    "--run"
+]
+
+print("Command:")
+print(" ".join([f'"{x}"' if " " in x else x for x in cmd]))
+
+result = subprocess.run(
+    cmd,
+    capture_output=True,
+    text=True,
+    cwd=str(PROJECT_ROOT)
+)
+
+print("\nSTDOUT:")
+print(result.stdout)
+
+print("\nSTDERR:")
+print(result.stderr)
+
+print("\nReturn code:")
+print(result.returncode)
+
+if result.returncode != 0:
+    raise RuntimeError(
+        "V5.1a module CLI test failed. Check STDERR above."
+    )
+
+print("\n====================================================")
+print("V5.1a COMPLETED SUCCESSFULLY")
+print("====================================================")
+print("Generated V5.1a output folder:")
+print(V5_1A_OUTPUT_DIR)

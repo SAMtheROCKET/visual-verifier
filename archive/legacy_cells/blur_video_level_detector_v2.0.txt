@@ -1,0 +1,1570 @@
+#================================================================
+# V2.0 - Video-Level Visual Processing Verification + Temporal Tracking
+#================================================================
+# New in V2.0:
+#   1. Keeps V1.3 detection, severity, reports, summary.json
+#   2. Adds temporal tracking using IoU matching
+#   3. Adds track_id to every detected region
+#   4. Adds track_report.csv
+#   5. Detects missing/gap frames inside each track
+#
+# Target-agnostic:
+#   Works for blur, mask, mosaic, crop-paste, blackout,
+#   redaction, anonymization, or any visual processing.
+#================================================================
+
+import os
+import cv2
+import json
+import numpy as np
+import pandas as pd
+
+
+#================================================================
+# USER SETTINGS
+#================================================================
+
+PROCESSED_VIDEO_FILE_NAME = "video_blur_partial"  # CHANGE THIS NAME FOR TESTING AGAINST RAW VIDEO
+
+RAW_VIDEO_PATH = r"C:\work_tickets\blur_detect_v2\input\video_raw.mp4"
+PROCESSED_VIDEO_PATH = rf"C:\work_tickets\blur_detect_v2\input\{PROCESSED_VIDEO_FILE_NAME}.mp4"
+
+OUTPUT_DIR = rf"C:\work_tickets\blur_detect_v2\output\video_process\{PROCESSED_VIDEO_FILE_NAME}_results"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+OUTPUT_VERSION = "v2_0"
+
+OUTPUT_ANNOTATED_VIDEO = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_annotated_video.mp4"
+)
+
+OUTPUT_FRAME_REPORT = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_frame_report.csv"
+)
+
+OUTPUT_REGION_REPORT = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_region_report.csv"
+)
+
+OUTPUT_TRACK_REPORT = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_track_report.csv"
+)
+
+OUTPUT_SUMMARY_TXT = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_summary.txt"
+)
+
+OUTPUT_SUMMARY_JSON = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_summary.json"
+)
+
+RAW_FRAMES_DIR = os.path.join(OUTPUT_DIR, "raw_frames")
+PROCESSED_FRAMES_DIR = os.path.join(OUTPUT_DIR, "processed_frames")
+ANNOTATED_FRAMES_DIR = os.path.join(OUTPUT_DIR, "annotated_frames")
+REGION_CROPS_DIR = os.path.join(OUTPUT_DIR, "region_crops")
+
+os.makedirs(RAW_FRAMES_DIR, exist_ok=True)
+os.makedirs(PROCESSED_FRAMES_DIR, exist_ok=True)
+os.makedirs(ANNOTATED_FRAMES_DIR, exist_ok=True)
+os.makedirs(REGION_CROPS_DIR, exist_ok=True)
+
+
+#================================================================
+# DETECTION PARAMETERS
+#================================================================
+
+DIFF_THRESHOLD = 30
+MIN_BOX_AREA = 80
+MIN_BOX_WIDTH = 6
+MIN_BOX_HEIGHT = 6
+MERGE_KERNEL_SIZE = 9
+BOX_PADDING = 3
+
+PROCESS_EVERY_N_FRAMES = 1
+MAX_FRAMES = None
+
+EXPECT_PROCESSING_IN_EVERY_FRAME = True
+
+SAVE_EXTRACTED_FRAMES = True
+SAVE_REGION_CROPS = True
+
+BOX_COLOR = (0, 255, 0)
+FAIL_COLOR = (0, 0, 255)
+TEXT_COLOR = (0, 255, 255)
+
+
+#================================================================
+# TEMPORAL TRACKING SETTINGS
+#================================================================
+
+TRACK_IOU_THRESHOLD = 0.20
+MAX_TRACK_MISSING_FRAMES = 3
+
+
+#================================================================
+# SEVERITY SETTINGS
+#================================================================
+
+DIFF_NORMALIZER = 80.0
+CHANGED_RATIO_NORMALIZER = 0.75
+
+VERY_LOW_THRESHOLD = 10
+LOW_THRESHOLD = 30
+MEDIUM_THRESHOLD = 60
+HIGH_THRESHOLD = 80
+
+
+#================================================================
+# VIDEO INFO
+#================================================================
+
+def get_video_info(video_path):
+    cap = cv2.VideoCapture(video_path)
+
+    if not cap.isOpened():
+        raise FileNotFoundError(f"Could not open video: {video_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    duration_sec = frame_count / fps if fps and fps > 0 else 0
+
+    cap.release()
+
+    return {
+        "path": video_path,
+        "fps": float(fps),
+        "frame_count": int(frame_count),
+        "width": int(width),
+        "height": int(height),
+        "duration_sec": float(duration_sec)
+    }
+
+
+#================================================================
+# BASIC HELPERS
+#================================================================
+
+def safe_crop(image, x1, y1, x2, y2):
+    h, w = image.shape[:2]
+
+    x1 = max(0, min(w, int(x1)))
+    y1 = max(0, min(h, int(y1)))
+    x2 = max(0, min(w, int(x2)))
+    y2 = max(0, min(h, int(y2)))
+
+    return image[y1:y2, x1:x2]
+
+
+def calculate_iou(box_a, box_b):
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+
+    inter_area = inter_w * inter_h
+
+    area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+    area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+
+    union_area = area_a + area_b - inter_area
+
+    if union_area <= 0:
+        return 0.0
+
+    return inter_area / union_area
+
+
+def max_consecutive_gap(missing_frames):
+    if not missing_frames:
+        return 0
+
+    max_gap = 1
+    current_gap = 1
+
+    for i in range(1, len(missing_frames)):
+        if missing_frames[i] == missing_frames[i - 1] + 1:
+            current_gap += 1
+            max_gap = max(max_gap, current_gap)
+        else:
+            current_gap = 1
+
+    return max_gap
+
+
+def convert_for_json(obj):
+    if isinstance(obj, dict):
+        return {k: convert_for_json(v) for k, v in obj.items()}
+
+    if isinstance(obj, list):
+        return [convert_for_json(v) for v in obj]
+
+    if isinstance(obj, tuple):
+        return [convert_for_json(v) for v in obj]
+
+    if isinstance(obj, np.integer):
+        return int(obj)
+
+    if isinstance(obj, np.floating):
+        value = float(obj)
+        if np.isinf(value):
+            return "inf"
+        if np.isnan(value):
+            return None
+        return value
+
+    if isinstance(obj, float):
+        if np.isinf(obj):
+            return "inf"
+        if np.isnan(obj):
+            return None
+        return obj
+
+    return obj
+
+
+#================================================================
+# LAPLACIAN SHARPNESS
+#================================================================
+
+def calculate_laplacian_variance(image_crop):
+    if image_crop is None or image_crop.size == 0:
+        return 0.0
+
+    gray = cv2.cvtColor(image_crop, cv2.COLOR_BGR2GRAY)
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+    return float(laplacian_var)
+
+
+#================================================================
+# SEVERITY SCORE
+#================================================================
+
+def calculate_severity_score(
+    mean_diff,
+    changed_ratio,
+    laplacian_raw,
+    laplacian_processed
+):
+    diff_component = min(1.0, mean_diff / DIFF_NORMALIZER)
+
+    density_component = min(
+        1.0,
+        changed_ratio / CHANGED_RATIO_NORMALIZER
+    )
+
+    epsilon = 1e-9
+
+    if laplacian_raw <= epsilon:
+        edge_change_ratio = 0.0
+    else:
+        edge_change_ratio = abs(laplacian_processed - laplacian_raw) / (laplacian_raw + epsilon)
+
+    edge_component = min(1.0, edge_change_ratio)
+
+    severity_score = (
+        0.45 * diff_component +
+        0.25 * density_component +
+        0.30 * edge_component
+    ) * 100.0
+
+    severity_score = round(float(severity_score), 2)
+    edge_change_ratio = round(float(edge_change_ratio), 6)
+
+    return severity_score, edge_change_ratio
+
+
+def get_severity_label(severity_score):
+    if severity_score >= HIGH_THRESHOLD:
+        return "VERY HIGH"
+    elif severity_score >= MEDIUM_THRESHOLD:
+        return "HIGH"
+    elif severity_score >= LOW_THRESHOLD:
+        return "MEDIUM"
+    elif severity_score >= VERY_LOW_THRESHOLD:
+        return "LOW"
+    else:
+        return "VERY LOW"
+
+
+def calculate_blur_percentage(laplacian_raw, laplacian_processed):
+    epsilon = 1e-9
+
+    if laplacian_raw <= epsilon:
+        return float("inf")
+
+    return float(laplacian_processed * 100.0 / laplacian_raw)
+
+
+#================================================================
+# MULTIPLE REGION DETECTION WITH SEVERITY
+#================================================================
+
+def detect_multiple_processed_regions(raw_frame, processed_frame):
+    if raw_frame.shape != processed_frame.shape:
+        processed_frame = cv2.resize(
+            processed_frame,
+            (raw_frame.shape[1], raw_frame.shape[0])
+        )
+
+    gray_raw = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2GRAY)
+    gray_processed = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2GRAY)
+
+    diff = cv2.absdiff(gray_raw, gray_processed)
+
+    _, threshold_mask = cv2.threshold(
+        diff,
+        DIFF_THRESHOLD,
+        255,
+        cv2.THRESH_BINARY
+    )
+
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (MERGE_KERNEL_SIZE, MERGE_KERNEL_SIZE)
+    )
+
+    cleaned_mask = cv2.morphologyEx(
+        threshold_mask,
+        cv2.MORPH_CLOSE,
+        kernel
+    )
+
+    cleaned_mask = cv2.dilate(
+        cleaned_mask,
+        kernel,
+        iterations=1
+    )
+
+    contours, _ = cv2.findContours(
+        cleaned_mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    frame_h, frame_w = raw_frame.shape[:2]
+    boxes = []
+
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+
+        x1 = max(0, x - BOX_PADDING)
+        y1 = max(0, y - BOX_PADDING)
+        x2 = min(frame_w, x + w + BOX_PADDING)
+        y2 = min(frame_h, y + h + BOX_PADDING)
+
+        box_width = x2 - x1
+        box_height = y2 - y1
+        box_area = box_width * box_height
+
+        if box_area < MIN_BOX_AREA:
+            continue
+
+        if box_width < MIN_BOX_WIDTH or box_height < MIN_BOX_HEIGHT:
+            continue
+
+        diff_crop = diff[y1:y2, x1:x2]
+        threshold_crop = threshold_mask[y1:y2, x1:x2]
+
+        changed_pixels = int(np.sum(threshold_crop > 0))
+        changed_ratio = changed_pixels / box_area if box_area > 0 else 0.0
+
+        mean_diff = float(np.mean(diff_crop))
+        max_diff = float(np.max(diff_crop))
+
+        raw_crop = safe_crop(raw_frame, x1, y1, x2, y2)
+        processed_crop = safe_crop(processed_frame, x1, y1, x2, y2)
+
+        laplacian_raw = calculate_laplacian_variance(raw_crop)
+        laplacian_processed = calculate_laplacian_variance(processed_crop)
+
+        blur_percentage = calculate_blur_percentage(
+            laplacian_raw,
+            laplacian_processed
+        )
+
+        severity_score, edge_change_ratio = calculate_severity_score(
+            mean_diff=mean_diff,
+            changed_ratio=changed_ratio,
+            laplacian_raw=laplacian_raw,
+            laplacian_processed=laplacian_processed
+        )
+
+        severity_label = get_severity_label(severity_score)
+
+        box = {
+            "x1": int(x1),
+            "y1": int(y1),
+            "x2": int(x2),
+            "y2": int(y2),
+            "width": int(box_width),
+            "height": int(box_height),
+            "area": int(box_area),
+            "changed_pixels": int(changed_pixels),
+            "changed_ratio": float(changed_ratio),
+            "mean_diff": float(mean_diff),
+            "max_diff": float(max_diff),
+            "laplacian_raw": float(laplacian_raw),
+            "laplacian_processed": float(laplacian_processed),
+            "blur_percentage_processed_vs_raw": float(blur_percentage),
+            "edge_change_ratio": float(edge_change_ratio),
+            "severity_score": float(severity_score),
+            "severity_label": severity_label,
+            "track_id": -1,
+            "track_iou": 0.0
+        }
+
+        boxes.append(box)
+
+    boxes = sorted(boxes, key=lambda b: (b["y1"], b["x1"]))
+
+    return boxes, diff, threshold_mask, cleaned_mask
+
+
+#================================================================
+# TEMPORAL TRACKER
+#================================================================
+
+class SimpleIoUTracker:
+    """
+    Simple temporal tracker using IoU matching.
+
+    It assigns stable track IDs to detected regions across frames.
+    """
+
+    def __init__(self, iou_threshold=0.20, max_missing_frames=3):
+        self.iou_threshold = iou_threshold
+        self.max_missing_frames = max_missing_frames
+        self.next_track_id = 1
+        self.tracks = {}
+
+    def update(self, boxes, frame_number):
+        assigned_detection_indices = set()
+
+        # Match current boxes to existing tracks
+        for track_id in list(self.tracks.keys()):
+            track = self.tracks[track_id]
+            old_bbox = track["bbox"]
+
+            best_iou = 0.0
+            best_det_idx = None
+
+            for det_idx, box in enumerate(boxes):
+                if det_idx in assigned_detection_indices:
+                    continue
+
+                new_bbox = (
+                    box["x1"],
+                    box["y1"],
+                    box["x2"],
+                    box["y2"]
+                )
+
+                iou = calculate_iou(old_bbox, new_bbox)
+
+                if iou > best_iou:
+                    best_iou = iou
+                    best_det_idx = det_idx
+
+            if best_det_idx is not None and best_iou >= self.iou_threshold:
+                boxes[best_det_idx]["track_id"] = int(track_id)
+                boxes[best_det_idx]["track_iou"] = round(float(best_iou), 6)
+
+                self.tracks[track_id]["bbox"] = (
+                    boxes[best_det_idx]["x1"],
+                    boxes[best_det_idx]["y1"],
+                    boxes[best_det_idx]["x2"],
+                    boxes[best_det_idx]["y2"]
+                )
+
+                self.tracks[track_id]["last_frame"] = int(frame_number)
+                self.tracks[track_id]["missing_count"] = 0
+
+                assigned_detection_indices.add(best_det_idx)
+
+            else:
+                self.tracks[track_id]["missing_count"] += 1
+
+        # Create new tracks for unmatched detections
+        for det_idx, box in enumerate(boxes):
+            if det_idx in assigned_detection_indices:
+                continue
+
+            track_id = self.next_track_id
+            self.next_track_id += 1
+
+            box["track_id"] = int(track_id)
+            box["track_iou"] = 1.0
+
+            self.tracks[track_id] = {
+                "bbox": (
+                    box["x1"],
+                    box["y1"],
+                    box["x2"],
+                    box["y2"]
+                ),
+                "first_frame": int(frame_number),
+                "last_frame": int(frame_number),
+                "missing_count": 0
+            }
+
+        # Remove tracks that have been missing too long
+        for track_id in list(self.tracks.keys()):
+            if self.tracks[track_id]["missing_count"] > self.max_missing_frames:
+                del self.tracks[track_id]
+
+        return boxes
+
+
+#================================================================
+# DRAW BOXES WITH TRACK ID + SEVERITY
+#================================================================
+
+def draw_boxes_on_frame(frame, boxes, frame_number, total_frames, frame_status):
+    annotated = frame.copy()
+
+    for box_id, box in enumerate(boxes, start=1):
+        x1 = box["x1"]
+        y1 = box["y1"]
+        x2 = box["x2"]
+        y2 = box["y2"]
+
+        cv2.rectangle(
+            annotated,
+            (x1, y1),
+            (x2, y2),
+            BOX_COLOR,
+            2
+        )
+
+        label = (
+            f"T{box['track_id']} "
+            f"B{box_id} "
+            f"S:{box['severity_score']} "
+            f"{box['severity_label']}"
+        )
+
+        cv2.putText(
+            annotated,
+            label,
+            (x1, max(20, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            BOX_COLOR,
+            2,
+            cv2.LINE_AA
+        )
+
+    header_color = FAIL_COLOR if "FAIL" in frame_status else TEXT_COLOR
+
+    if len(boxes) > 0:
+        max_severity = max(box["severity_score"] for box in boxes)
+        avg_severity = float(np.mean([box["severity_score"] for box in boxes]))
+        track_ids = sorted(list(set([box["track_id"] for box in boxes])))
+    else:
+        max_severity = 0.0
+        avg_severity = 0.0
+        track_ids = []
+
+    header_text = (
+        f"Frame {frame_number}/{total_frames} | "
+        f"Regions: {len(boxes)} | "
+        f"Tracks: {track_ids} | "
+        f"MaxS: {round(max_severity, 2)} | "
+        f"{frame_status}"
+    )
+
+    cv2.putText(
+        annotated,
+        header_text,
+        (20, 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.62,
+        header_color,
+        2,
+        cv2.LINE_AA
+    )
+
+    return annotated
+
+
+#================================================================
+# REPORT HELPERS
+#================================================================
+
+def get_row_as_dict(row):
+    if row is None:
+        return None
+
+    result = {}
+
+    for key, value in row.items():
+        result[key] = convert_for_json(value)
+
+    return result
+
+
+def build_warnings(raw_info, processed_info):
+    warnings = []
+
+    if raw_info["frame_count"] != processed_info["frame_count"]:
+        warnings.append(
+            "Raw and processed videos have different frame counts. Only common frames were checked."
+        )
+
+    if raw_info["fps"] != processed_info["fps"]:
+        warnings.append(
+            "Raw and processed videos have different FPS metadata. V2.0 compares frames by index, not timestamp alignment."
+        )
+
+    if raw_info["width"] != processed_info["width"] or raw_info["height"] != processed_info["height"]:
+        warnings.append(
+            "Raw and processed videos have different resolutions. Processed frames were resized to match raw frames."
+        )
+
+    if PROCESS_EVERY_N_FRAMES != 1:
+        warnings.append(
+            f"Sampling is enabled: only every {PROCESS_EVERY_N_FRAMES} frame(s) were checked. This is not recommended for safety-critical verification."
+        )
+
+    if MAX_FRAMES is not None:
+        warnings.append(
+            f"MAX_FRAMES is set to {MAX_FRAMES}. Only a limited part of the video was checked."
+        )
+
+    if not EXPECT_PROCESSING_IN_EVERY_FRAME:
+        warnings.append(
+            "EXPECT_PROCESSING_IN_EVERY_FRAME is False. Frames with no processing are not treated as failures."
+        )
+
+    return warnings
+
+
+def build_track_report(df_region_report):
+    if df_region_report is None or len(df_region_report) == 0:
+        return pd.DataFrame([])
+
+    track_rows = []
+
+    for track_id, group in df_region_report.groupby("track_id"):
+        group = group.sort_values(by="frame_number")
+
+        frames_present = sorted(group["frame_number"].unique().astype(int).tolist())
+        first_frame = int(min(frames_present))
+        last_frame = int(max(frames_present))
+
+        expected_frames = list(range(first_frame, last_frame + 1))
+        missing_frames = sorted(list(set(expected_frames) - set(frames_present)))
+
+        track_duration_frames = len(expected_frames)
+        frames_present_count = len(frames_present)
+        missing_frame_count = len(missing_frames)
+
+        presence_ratio = (
+            frames_present_count / track_duration_frames
+            if track_duration_frames > 0 else 0.0
+        )
+
+        track_status = "CONTINUOUS"
+        if missing_frame_count > 0:
+            track_status = "HAS_TEMPORAL_GAPS"
+
+        track_rows.append({
+            "track_id": int(track_id),
+            "track_status": track_status,
+            "first_frame": first_frame,
+            "last_frame": last_frame,
+            "track_duration_frames": int(track_duration_frames),
+            "frames_present_count": int(frames_present_count),
+            "missing_frame_count": int(missing_frame_count),
+            "presence_ratio": round(float(presence_ratio), 6),
+            "frames_present": frames_present,
+            "missing_frames": missing_frames,
+            "max_consecutive_missing_frames": int(max_consecutive_gap(missing_frames)),
+            "total_regions_in_track": int(len(group)),
+            "avg_severity_score": round(float(group["severity_score"].mean()), 2),
+            "max_severity_score": round(float(group["severity_score"].max()), 2),
+            "min_severity_score": round(float(group["severity_score"].min()), 2),
+            "avg_area_px": round(float(group["area_px"].mean()), 2),
+            "max_area_px": round(float(group["area_px"].max()), 2),
+            "avg_changed_ratio": round(float(group["changed_ratio"].mean()), 6),
+            "avg_mean_diff": round(float(group["mean_diff"].mean()), 4)
+        })
+
+    return pd.DataFrame(track_rows)
+
+
+#================================================================
+# MAIN V2.0 VIDEO VERIFICATION
+#================================================================
+
+def verify_video_level_v2_0(raw_video_path, processed_video_path):
+    raw_info = get_video_info(raw_video_path)
+    processed_info = get_video_info(processed_video_path)
+
+    warnings = build_warnings(raw_info, processed_info)
+
+    print("====================================================")
+    print("RAW VIDEO INFO")
+    print("====================================================")
+    print(raw_info)
+
+    print("\n====================================================")
+    print("PROCESSED VIDEO INFO")
+    print("====================================================")
+    print(processed_info)
+
+    if len(warnings) > 0:
+        print("\n====================================================")
+        print("WARNINGS")
+        print("====================================================")
+        for warning in warnings:
+            print("-", warning)
+
+    raw_cap = cv2.VideoCapture(raw_video_path)
+    processed_cap = cv2.VideoCapture(processed_video_path)
+
+    raw_fps = raw_info["fps"]
+    raw_width = raw_info["width"]
+    raw_height = raw_info["height"]
+
+    if raw_fps is None or raw_fps <= 0:
+        print("\nWARNING: FPS could not be read correctly. Using fallback FPS = 30.")
+        raw_fps = 30
+        warnings.append("Raw FPS could not be read correctly. Fallback FPS = 30 was used.")
+
+    raw_frame_count = raw_info["frame_count"]
+    processed_frame_count = processed_info["frame_count"]
+
+    total_common_frames = min(raw_frame_count, processed_frame_count)
+
+    if MAX_FRAMES is not None:
+        total_common_frames = min(total_common_frames, MAX_FRAMES)
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+    video_writer = cv2.VideoWriter(
+        OUTPUT_ANNOTATED_VIDEO,
+        fourcc,
+        raw_fps,
+        (raw_width, raw_height)
+    )
+
+    tracker = SimpleIoUTracker(
+        iou_threshold=TRACK_IOU_THRESHOLD,
+        max_missing_frames=MAX_TRACK_MISSING_FRAMES
+    )
+
+    frame_report_rows = []
+    region_report_rows = []
+
+    failed_frames = []
+    frames_checked = 0
+    frames_skipped = 0
+    frames_with_processing = 0
+    frames_without_processing = 0
+    total_detected_regions = 0
+    global_region_id = 0
+
+    print("\n====================================================")
+    print("STARTING V2.0 FRAME-BY-FRAME VERIFICATION + TRACKING")
+    print("====================================================")
+
+    frame_index = 0
+
+    while frame_index < total_common_frames:
+        ret_raw, raw_frame = raw_cap.read()
+        ret_processed, processed_frame = processed_cap.read()
+
+        if not ret_raw or not ret_processed:
+            break
+
+        frame_number = frame_index + 1
+        should_process = (frame_index % PROCESS_EVERY_N_FRAMES == 0)
+
+        if not should_process:
+            frames_skipped += 1
+            frame_index += 1
+            continue
+
+        if processed_frame.shape != raw_frame.shape:
+            processed_frame = cv2.resize(
+                processed_frame,
+                (raw_frame.shape[1], raw_frame.shape[0])
+            )
+
+        boxes, diff, threshold_mask, cleaned_mask = detect_multiple_processed_regions(
+            raw_frame,
+            processed_frame
+        )
+
+        boxes = tracker.update(boxes, frame_number)
+
+        num_regions = len(boxes)
+        total_detected_regions += num_regions
+
+        if num_regions > 0:
+            frames_with_processing += 1
+            frame_status = "PASS - PROCESSING DETECTED"
+        else:
+            frames_without_processing += 1
+
+            if EXPECT_PROCESSING_IN_EVERY_FRAME:
+                frame_status = "FAIL - NO PROCESSING DETECTED"
+                failed_frames.append(frame_number)
+            else:
+                frame_status = "NO PROCESSING DETECTED"
+
+        annotated_frame = draw_boxes_on_frame(
+            processed_frame,
+            boxes,
+            frame_number,
+            total_common_frames,
+            frame_status
+        )
+
+        video_writer.write(annotated_frame)
+
+        timestamp_sec = round(frame_index / raw_fps, 4) if raw_fps > 0 else None
+
+        if SAVE_EXTRACTED_FRAMES:
+            raw_frame_path = os.path.join(
+                RAW_FRAMES_DIR,
+                f"raw_frame_{frame_number:06d}.png"
+            )
+
+            processed_frame_path = os.path.join(
+                PROCESSED_FRAMES_DIR,
+                f"{PROCESSED_VIDEO_FILE_NAME}_processed_frame_{frame_number:06d}.png"
+            )
+
+            annotated_frame_path = os.path.join(
+                ANNOTATED_FRAMES_DIR,
+                f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_annotated_frame_{frame_number:06d}.png"
+            )
+
+            cv2.imwrite(raw_frame_path, raw_frame)
+            cv2.imwrite(processed_frame_path, processed_frame)
+            cv2.imwrite(annotated_frame_path, annotated_frame)
+
+        if num_regions > 0:
+            total_changed_pixels = sum(box["changed_pixels"] for box in boxes)
+            total_box_area = sum(box["area"] for box in boxes)
+            avg_mean_diff = float(np.mean([box["mean_diff"] for box in boxes]))
+            max_diff = float(np.max([box["max_diff"] for box in boxes]))
+            largest_region_area = max([box["area"] for box in boxes])
+            avg_severity_score = float(np.mean([box["severity_score"] for box in boxes]))
+            max_severity_score = float(np.max([box["severity_score"] for box in boxes]))
+            detected_track_ids = sorted(list(set([int(box["track_id"]) for box in boxes])))
+        else:
+            total_changed_pixels = 0
+            total_box_area = 0
+            avg_mean_diff = 0.0
+            max_diff = 0.0
+            largest_region_area = 0
+            avg_severity_score = 0.0
+            max_severity_score = 0.0
+            detected_track_ids = []
+
+        frame_area = raw_width * raw_height
+        processed_area_ratio = total_box_area / frame_area if frame_area > 0 else 0.0
+
+        frame_report_rows.append({
+            "processed_video_file_name": PROCESSED_VIDEO_FILE_NAME,
+            "frame_number": int(frame_number),
+            "timestamp_sec": timestamp_sec,
+            "num_detected_regions": int(num_regions),
+            "detected_track_ids": detected_track_ids,
+            "total_region_area_px": int(total_box_area),
+            "processed_area_ratio": round(float(processed_area_ratio), 6),
+            "total_changed_pixels": int(total_changed_pixels),
+            "avg_mean_diff": round(float(avg_mean_diff), 4),
+            "max_diff": round(float(max_diff), 4),
+            "largest_region_area_px": int(largest_region_area),
+            "avg_severity_score": round(float(avg_severity_score), 2),
+            "max_severity_score": round(float(max_severity_score), 2),
+            "frame_status": frame_status
+        })
+
+        for box_id, box in enumerate(boxes, start=1):
+            global_region_id += 1
+
+            x1 = box["x1"]
+            y1 = box["y1"]
+            x2 = box["x2"]
+            y2 = box["y2"]
+
+            raw_crop = safe_crop(raw_frame, x1, y1, x2, y2)
+            processed_crop = safe_crop(processed_frame, x1, y1, x2, y2)
+            annotated_crop = safe_crop(annotated_frame, x1, y1, x2, y2)
+
+            raw_crop_path = ""
+            processed_crop_path = ""
+            annotated_crop_path = ""
+
+            if SAVE_REGION_CROPS:
+                region_name = (
+                    f"{PROCESSED_VIDEO_FILE_NAME}"
+                    f"_{OUTPUT_VERSION}"
+                    f"_frame_{frame_number:06d}"
+                    f"_track_{box['track_id']:03d}"
+                    f"_box_{box_id:03d}"
+                )
+
+                raw_crop_path = os.path.join(
+                    REGION_CROPS_DIR,
+                    f"{region_name}_raw.png"
+                )
+
+                processed_crop_path = os.path.join(
+                    REGION_CROPS_DIR,
+                    f"{region_name}_processed.png"
+                )
+
+                annotated_crop_path = os.path.join(
+                    REGION_CROPS_DIR,
+                    f"{region_name}_annotated.png"
+                )
+
+                cv2.imwrite(raw_crop_path, raw_crop)
+                cv2.imwrite(processed_crop_path, processed_crop)
+                cv2.imwrite(annotated_crop_path, annotated_crop)
+
+            blur_percentage = box["blur_percentage_processed_vs_raw"]
+
+            if np.isfinite(blur_percentage):
+                blur_percentage_value = round(float(blur_percentage), 4)
+            else:
+                blur_percentage_value = "inf"
+
+            region_report_rows.append({
+                "processed_video_file_name": PROCESSED_VIDEO_FILE_NAME,
+                "global_region_id": int(global_region_id),
+                "track_id": int(box["track_id"]),
+                "track_iou": round(float(box["track_iou"]), 6),
+                "frame_number": int(frame_number),
+                "timestamp_sec": timestamp_sec,
+                "box_id_in_frame": int(box_id),
+                "x1": int(x1),
+                "y1": int(y1),
+                "x2": int(x2),
+                "y2": int(y2),
+                "width": int(box["width"]),
+                "height": int(box["height"]),
+                "area_px": int(box["area"]),
+                "changed_pixels": int(box["changed_pixels"]),
+                "changed_ratio": round(float(box["changed_ratio"]), 6),
+                "mean_diff": round(float(box["mean_diff"]), 4),
+                "max_diff": round(float(box["max_diff"]), 4),
+                "laplacian_raw": round(float(box["laplacian_raw"]), 4),
+                "laplacian_processed": round(float(box["laplacian_processed"]), 4),
+                "blur_percentage_processed_vs_raw": blur_percentage_value,
+                "edge_change_ratio": float(box["edge_change_ratio"]),
+                "severity_score": float(box["severity_score"]),
+                "severity_label": box["severity_label"],
+                "raw_crop_path": raw_crop_path,
+                "processed_crop_path": processed_crop_path,
+                "annotated_crop_path": annotated_crop_path
+            })
+
+        frames_checked += 1
+
+        print(
+            f"Frame {frame_number}/{total_common_frames} | "
+            f"Regions: {num_regions} | "
+            f"Tracks: {detected_track_ids} | "
+            f"Max severity: {round(max_severity_score, 2)} | "
+            f"Status: {frame_status}"
+        )
+
+        frame_index += 1
+
+    raw_cap.release()
+    processed_cap.release()
+    video_writer.release()
+
+    df_frame_report = pd.DataFrame(frame_report_rows)
+    df_region_report = pd.DataFrame(region_report_rows)
+    df_track_report = build_track_report(df_region_report)
+
+    df_frame_report.to_csv(
+        OUTPUT_FRAME_REPORT,
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+    df_region_report.to_csv(
+        OUTPUT_REGION_REPORT,
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+    df_track_report.to_csv(
+        OUTPUT_TRACK_REPORT,
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+    #============================================================
+    # SUMMARY CALCULATION
+    #============================================================
+
+    if frames_checked > 0:
+        processing_coverage_percent = frames_with_processing * 100.0 / frames_checked
+        failed_frame_percent = len(failed_frames) * 100.0 / frames_checked
+        avg_regions_per_checked_frame = total_detected_regions / frames_checked
+    else:
+        processing_coverage_percent = 0.0
+        failed_frame_percent = 0.0
+        avg_regions_per_checked_frame = 0.0
+
+    if len(df_frame_report) > 0:
+        strongest_frame_row = df_frame_report.sort_values(
+            by="max_severity_score",
+            ascending=False
+        ).iloc[0]
+
+        strongest_frame = get_row_as_dict(strongest_frame_row)
+
+        processed_only_df = df_frame_report[df_frame_report["num_detected_regions"] > 0]
+
+        if len(processed_only_df) > 0:
+            weakest_processed_frame_row = processed_only_df.sort_values(
+                by="max_severity_score",
+                ascending=True
+            ).iloc[0]
+
+            weakest_processed_frame = get_row_as_dict(weakest_processed_frame_row)
+        else:
+            weakest_processed_frame = None
+    else:
+        strongest_frame = None
+        weakest_processed_frame = None
+
+    if len(df_region_report) > 0:
+        avg_region_area = float(df_region_report["area_px"].mean())
+        max_region_area = float(df_region_report["area_px"].max())
+        avg_changed_ratio = float(df_region_report["changed_ratio"].mean())
+        avg_region_mean_diff = float(df_region_report["mean_diff"].mean())
+        avg_severity = float(df_region_report["severity_score"].mean())
+        max_severity = float(df_region_report["severity_score"].max())
+
+        severity_counts_raw = df_region_report["severity_label"].value_counts().to_dict()
+
+        severity_counts = {
+            "VERY LOW": int(severity_counts_raw.get("VERY LOW", 0)),
+            "LOW": int(severity_counts_raw.get("LOW", 0)),
+            "MEDIUM": int(severity_counts_raw.get("MEDIUM", 0)),
+            "HIGH": int(severity_counts_raw.get("HIGH", 0)),
+            "VERY HIGH": int(severity_counts_raw.get("VERY HIGH", 0))
+        }
+
+        highest_severity_region_row = df_region_report.sort_values(
+            by="severity_score",
+            ascending=False
+        ).iloc[0]
+
+        highest_severity_region = get_row_as_dict(highest_severity_region_row)
+
+        strongest_region_text = (
+            f"Frame {int(highest_severity_region_row['frame_number'])}, "
+            f"Track {int(highest_severity_region_row['track_id'])}, "
+            f"Box {int(highest_severity_region_row['box_id_in_frame'])}, "
+            f"Severity {highest_severity_region_row['severity_score']} "
+            f"({highest_severity_region_row['severity_label']})"
+        )
+
+        unique_tracks_count = int(df_region_report["track_id"].nunique())
+
+    else:
+        avg_region_area = 0.0
+        max_region_area = 0.0
+        avg_changed_ratio = 0.0
+        avg_region_mean_diff = 0.0
+        avg_severity = 0.0
+        max_severity = 0.0
+
+        severity_counts = {
+            "VERY LOW": 0,
+            "LOW": 0,
+            "MEDIUM": 0,
+            "HIGH": 0,
+            "VERY HIGH": 0
+        }
+
+        highest_severity_region = None
+        strongest_region_text = "No region detected"
+        unique_tracks_count = 0
+
+    if len(df_track_report) > 0:
+        tracks_with_gaps_df = df_track_report[df_track_report["missing_frame_count"] > 0]
+        tracks_with_gaps_count = int(len(tracks_with_gaps_df))
+        continuous_tracks_count = int(len(df_track_report) - tracks_with_gaps_count)
+
+        all_track_missing_frames = sorted(
+            list(
+                set(
+                    frame
+                    for missing_list in df_track_report["missing_frames"].tolist()
+                    for frame in missing_list
+                )
+            )
+        )
+
+        worst_gap_track_row = df_track_report.sort_values(
+            by=["missing_frame_count", "max_consecutive_missing_frames"],
+            ascending=False
+        ).iloc[0]
+
+        worst_gap_track = get_row_as_dict(worst_gap_track_row)
+
+    else:
+        tracks_with_gaps_count = 0
+        continuous_tracks_count = 0
+        all_track_missing_frames = []
+        worst_gap_track = None
+
+    if EXPECT_PROCESSING_IN_EVERY_FRAME and len(failed_frames) > 0:
+        final_result = "FAIL"
+        final_reason = (
+            "At least one checked frame had no detected visual processing. "
+            "For safety-critical visual processing verification, even one missed frame can be important."
+        )
+    elif tracks_with_gaps_count > 0:
+        final_result = "PASS_WITH_TRACK_GAP_WARNING"
+        final_reason = (
+            "Processing was detected overall, but temporal tracking found gaps in one or more tracks. "
+            "This may indicate missed visual processing in some frames."
+        )
+    elif frames_with_processing > 0:
+        final_result = "PASS_PROCESSING_DETECTED"
+        final_reason = (
+            "Visual processing differences were detected in checked frames, and no temporal track gaps were found."
+        )
+    else:
+        final_result = "NO_PROCESSING_DETECTED"
+        final_reason = (
+            "No significant visual difference was detected between raw and processed videos."
+        )
+
+    if PROCESS_EVERY_N_FRAMES != 1 and final_result.startswith("PASS"):
+        final_result = "PASS_WITH_SAMPLING_WARNING"
+        final_reason += (
+            " However, sampling was used, so unchecked frames may still contain missed processing."
+        )
+
+    summary_json = {
+        "tool_version": OUTPUT_VERSION,
+        "processed_video_file_name": PROCESSED_VIDEO_FILE_NAME,
+        "raw_video_path": raw_video_path,
+        "processed_video_path": processed_video_path,
+        "output_directory": OUTPUT_DIR,
+        "outputs": {
+            "annotated_video": OUTPUT_ANNOTATED_VIDEO,
+            "frame_report_csv": OUTPUT_FRAME_REPORT,
+            "region_report_csv": OUTPUT_REGION_REPORT,
+            "track_report_csv": OUTPUT_TRACK_REPORT,
+            "summary_txt": OUTPUT_SUMMARY_TXT,
+            "summary_json": OUTPUT_SUMMARY_JSON,
+            "raw_frames_dir": RAW_FRAMES_DIR,
+            "processed_frames_dir": PROCESSED_FRAMES_DIR,
+            "annotated_frames_dir": ANNOTATED_FRAMES_DIR,
+            "region_crops_dir": REGION_CROPS_DIR
+        },
+        "video_metadata": {
+            "raw": raw_info,
+            "processed": processed_info,
+            "resolution_used": {
+                "width": int(raw_width),
+                "height": int(raw_height)
+            },
+            "total_common_frames": int(total_common_frames)
+        },
+        "settings": {
+            "diff_threshold": DIFF_THRESHOLD,
+            "min_box_area": MIN_BOX_AREA,
+            "min_box_width": MIN_BOX_WIDTH,
+            "min_box_height": MIN_BOX_HEIGHT,
+            "merge_kernel_size": MERGE_KERNEL_SIZE,
+            "box_padding": BOX_PADDING,
+            "process_every_n_frames": PROCESS_EVERY_N_FRAMES,
+            "max_frames": MAX_FRAMES,
+            "expect_processing_in_every_frame": EXPECT_PROCESSING_IN_EVERY_FRAME,
+            "track_iou_threshold": TRACK_IOU_THRESHOLD,
+            "max_track_missing_frames": MAX_TRACK_MISSING_FRAMES,
+            "save_extracted_frames": SAVE_EXTRACTED_FRAMES,
+            "save_region_crops": SAVE_REGION_CROPS
+        },
+        "warnings": warnings,
+        "frame_level_summary": {
+            "frames_checked": int(frames_checked),
+            "frames_skipped": int(frames_skipped),
+            "frames_with_detected_processing": int(frames_with_processing),
+            "frames_without_detected_processing": int(frames_without_processing),
+            "processing_coverage_percent": round(float(processing_coverage_percent), 2),
+            "failed_frame_count": int(len(failed_frames)),
+            "failed_frames": [int(x) for x in failed_frames],
+            "failed_frame_percent": round(float(failed_frame_percent), 2),
+            "strongest_frame": strongest_frame,
+            "weakest_processed_frame": weakest_processed_frame
+        },
+        "region_level_summary": {
+            "total_detected_regions": int(total_detected_regions),
+            "average_regions_per_checked_frame": round(float(avg_regions_per_checked_frame), 2),
+            "average_region_area_px": round(float(avg_region_area), 2),
+            "maximum_region_area_px": round(float(max_region_area), 2),
+            "average_changed_ratio": round(float(avg_changed_ratio), 6),
+            "average_mean_pixel_difference": round(float(avg_region_mean_diff), 4),
+            "highest_severity_region": highest_severity_region
+        },
+        "severity_summary": {
+            "average_severity_score": round(float(avg_severity), 2),
+            "maximum_severity_score": round(float(max_severity), 2),
+            "severity_label_counts": severity_counts
+        },
+        "track_level_summary": {
+            "unique_tracks_count": int(unique_tracks_count),
+            "continuous_tracks_count": int(continuous_tracks_count),
+            "tracks_with_gaps_count": int(tracks_with_gaps_count),
+            "track_gap_frames": [int(x) for x in all_track_missing_frames],
+            "worst_gap_track": worst_gap_track
+        },
+        "final_result": final_result,
+        "final_reason": final_reason
+    }
+
+    summary_json = convert_for_json(summary_json)
+
+    with open(OUTPUT_SUMMARY_JSON, "w", encoding="utf-8") as f:
+        json.dump(summary_json, f, indent=4, ensure_ascii=False)
+
+    warnings_text = "\n".join([f"- {warning}" for warning in warnings]) if warnings else "No warnings."
+
+    if strongest_frame is not None:
+        strongest_frame_text = (
+            f"Frame {strongest_frame['frame_number']} "
+            f"with max severity {strongest_frame['max_severity_score']} "
+            f"and {strongest_frame['num_detected_regions']} detected region(s)."
+        )
+    else:
+        strongest_frame_text = "No frame data available."
+
+    if weakest_processed_frame is not None:
+        weakest_processed_frame_text = (
+            f"Frame {weakest_processed_frame['frame_number']} "
+            f"with max severity {weakest_processed_frame['max_severity_score']} "
+            f"and {weakest_processed_frame['num_detected_regions']} detected region(s)."
+        )
+    else:
+        weakest_processed_frame_text = "No processed frame detected."
+
+    summary_text = f"""
+====================================================
+V2.0 VIDEO-LEVEL VISUAL PROCESSING VERIFICATION SUMMARY
+====================================================
+
+Processed video test name:
+{PROCESSED_VIDEO_FILE_NAME}
+
+Raw video:
+{raw_video_path}
+
+Processed video:
+{processed_video_path}
+
+Output directory:
+{OUTPUT_DIR}
+
+----------------------------------------------------
+FINAL RESULT
+----------------------------------------------------
+
+Result:
+{final_result}
+
+Reason:
+{final_reason}
+
+----------------------------------------------------
+WARNINGS
+----------------------------------------------------
+
+{warnings_text}
+
+----------------------------------------------------
+VIDEO METADATA
+----------------------------------------------------
+
+Raw FPS:
+{raw_info["fps"]}
+
+Processed FPS:
+{processed_info["fps"]}
+
+Raw frame count:
+{raw_info["frame_count"]}
+
+Processed frame count:
+{processed_info["frame_count"]}
+
+Resolution used:
+{raw_width} x {raw_height}
+
+Total common frames:
+{total_common_frames}
+
+Process every N frames:
+{PROCESS_EVERY_N_FRAMES}
+
+Frames checked:
+{frames_checked}
+
+Frames skipped:
+{frames_skipped}
+
+----------------------------------------------------
+FRAME-LEVEL RESULT
+----------------------------------------------------
+
+Frames with detected processing:
+{frames_with_processing}
+
+Frames without detected processing:
+{frames_without_processing}
+
+Processing coverage:
+{round(processing_coverage_percent, 2)} %
+
+Failed frame count:
+{len(failed_frames)}
+
+Failed frames:
+{failed_frames}
+
+Failed frame percentage:
+{round(failed_frame_percent, 2)} %
+
+Strongest frame:
+{strongest_frame_text}
+
+Weakest processed frame:
+{weakest_processed_frame_text}
+
+----------------------------------------------------
+REGION-LEVEL RESULT
+----------------------------------------------------
+
+Total detected regions:
+{total_detected_regions}
+
+Average regions per checked frame:
+{round(avg_regions_per_checked_frame, 2)}
+
+Average region area:
+{round(float(avg_region_area), 2)} px
+
+Maximum region area:
+{round(float(max_region_area), 2)} px
+
+Average changed ratio:
+{round(float(avg_changed_ratio), 6)}
+
+Average mean pixel difference:
+{round(float(avg_region_mean_diff), 4)}
+
+Highest severity region:
+{strongest_region_text}
+
+----------------------------------------------------
+TEMPORAL TRACKING RESULT
+----------------------------------------------------
+
+Unique tracks:
+{unique_tracks_count}
+
+Continuous tracks:
+{continuous_tracks_count}
+
+Tracks with temporal gaps:
+{tracks_with_gaps_count}
+
+Track gap frames:
+{all_track_missing_frames}
+
+Worst gap track:
+{worst_gap_track}
+
+----------------------------------------------------
+SEVERITY RESULT
+----------------------------------------------------
+
+Average severity score:
+{round(float(avg_severity), 2)}
+
+Maximum severity score:
+{round(float(max_severity), 2)}
+
+Severity label counts:
+VERY LOW  : {severity_counts["VERY LOW"]}
+LOW       : {severity_counts["LOW"]}
+MEDIUM    : {severity_counts["MEDIUM"]}
+HIGH      : {severity_counts["HIGH"]}
+VERY HIGH : {severity_counts["VERY HIGH"]}
+
+----------------------------------------------------
+OUTPUT FILES
+----------------------------------------------------
+
+Annotated video:
+{OUTPUT_ANNOTATED_VIDEO}
+
+Frame report CSV:
+{OUTPUT_FRAME_REPORT}
+
+Region report CSV:
+{OUTPUT_REGION_REPORT}
+
+Track report CSV:
+{OUTPUT_TRACK_REPORT}
+
+Summary TXT:
+{OUTPUT_SUMMARY_TXT}
+
+Summary JSON:
+{OUTPUT_SUMMARY_JSON}
+
+Raw frames folder:
+{RAW_FRAMES_DIR}
+
+Processed frames folder:
+{PROCESSED_FRAMES_DIR}
+
+Annotated frames folder:
+{ANNOTATED_FRAMES_DIR}
+
+Region crops folder:
+{REGION_CROPS_DIR}
+
+----------------------------------------------------
+IMPORTANT INTERPRETATION
+----------------------------------------------------
+
+This V2.0 verifies pixel-level visual processing difference between
+the raw and processed videos, and tracks detected regions across time.
+
+It can show:
+- where visual processing happened
+- which frames had no detected processing
+- how strong each detected region appears
+- which temporal tracks are continuous
+- which tracks have missing/gap frames
+
+It does not yet guarantee object-aware semantic safety.
+For that, later versions need object-aware validation.
+====================================================
+"""
+
+    with open(OUTPUT_SUMMARY_TXT, "w", encoding="utf-8") as f:
+        f.write(summary_text)
+
+    print(summary_text)
+
+    print("\n====================================================")
+    print("FRAME REPORT PREVIEW")
+    print("====================================================")
+
+    if len(df_frame_report) > 0:
+        frame_preview_columns = [
+            "processed_video_file_name",
+            "frame_number",
+            "timestamp_sec",
+            "num_detected_regions",
+            "detected_track_ids",
+            "processed_area_ratio",
+            "avg_severity_score",
+            "max_severity_score",
+            "frame_status"
+        ]
+
+        print(df_frame_report[frame_preview_columns].head(30))
+    else:
+        print("No frame report generated.")
+
+    print("\n====================================================")
+    print("REGION REPORT PREVIEW")
+    print("====================================================")
+
+    if len(df_region_report) > 0:
+        region_preview_columns = [
+            "processed_video_file_name",
+            "global_region_id",
+            "track_id",
+            "track_iou",
+            "frame_number",
+            "box_id_in_frame",
+            "x1",
+            "y1",
+            "width",
+            "height",
+            "area_px",
+            "severity_score",
+            "severity_label"
+        ]
+
+        print(df_region_report[region_preview_columns].head(30))
+    else:
+        print("No region report generated.")
+
+    print("\n====================================================")
+    print("TRACK REPORT PREVIEW")
+    print("====================================================")
+
+    if len(df_track_report) > 0:
+        track_preview_columns = [
+            "track_id",
+            "track_status",
+            "first_frame",
+            "last_frame",
+            "frames_present_count",
+            "missing_frame_count",
+            "presence_ratio",
+            "missing_frames",
+            "avg_severity_score",
+            "max_severity_score"
+        ]
+
+        print(df_track_report[track_preview_columns].head(30))
+    else:
+        print("No track report generated.")
+
+    print("\n====================================================")
+    print("SUMMARY JSON SAVED TO")
+    print("====================================================")
+    print(OUTPUT_SUMMARY_JSON)
+
+    return df_frame_report, df_region_report, df_track_report, summary_json
+
+
+#================================================================
+# RUN V2.0
+#================================================================
+
+df_v2_0_frame_report, df_v2_0_region_report, df_v2_0_track_report, v2_0_summary = verify_video_level_v2_0(
+    RAW_VIDEO_PATH,
+    PROCESSED_VIDEO_PATH
+)

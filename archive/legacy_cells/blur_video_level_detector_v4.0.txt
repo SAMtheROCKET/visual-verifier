@@ -1,0 +1,672 @@
+# RUN IT AFTER V3.0, V3.2 functions are available.
+
+#================================================================
+# V4.0 - Batch Processing Runner
+#================================================================
+# Purpose:
+#   1. Run target-aware validation over multiple video pairs
+#   2. Support MANUAL_CSV and AUTO_BOOTSTRAP target modes per case
+#   3. Generate per-case reports
+#   4. Generate one combined batch summary CSV + JSON
+#
+# IMPORTANT:
+#   This cell assumes the V3.0 full code has already been run in this notebook.
+#   It reuses verify_video_level_v3_0() and helper functions.
+#================================================================
+
+import os
+import json
+import pandas as pd
+from datetime import datetime
+
+
+#================================================================
+# SAFETY CHECK
+#================================================================
+
+if "verify_video_level_v3_0" not in globals():
+    raise RuntimeError(
+        "verify_video_level_v3_0() is not available.\n"
+        "Run the full V3.0 cell first, then run V4.0."
+    )
+
+
+#================================================================
+# PROJECT SETTINGS
+#================================================================
+
+PROJECT_ROOT = r"C:\work_tickets\blur_detect_v2"
+
+INPUT_DIR = os.path.join(PROJECT_ROOT, "input")
+
+BATCH_CASES_CSV = os.path.join(
+    INPUT_DIR,
+    "v4_0_batch_cases.csv"
+)
+
+BATCH_OUTPUT_ROOT = os.path.join(
+    PROJECT_ROOT,
+    "output",
+    "video_process_batch",
+    "v4_0_batch_results"
+)
+
+os.makedirs(INPUT_DIR, exist_ok=True)
+os.makedirs(BATCH_OUTPUT_ROOT, exist_ok=True)
+
+BATCH_SUMMARY_CSV = os.path.join(
+    BATCH_OUTPUT_ROOT,
+    "v4_0_batch_summary.csv"
+)
+
+BATCH_SUMMARY_JSON = os.path.join(
+    BATCH_OUTPUT_ROOT,
+    "v4_0_batch_summary.json"
+)
+
+BATCH_RUN_LOG_TXT = os.path.join(
+    BATCH_OUTPUT_ROOT,
+    "v4_0_batch_run_log.txt"
+)
+
+
+#================================================================
+# CREATE TEMPLATE BATCH CSV IF MISSING
+#================================================================
+
+if not os.path.exists(BATCH_CASES_CSV):
+    template_df = pd.DataFrame([
+        {
+            "enabled": True,
+            "case_id": "case_001",
+            "processed_video_file_name": "video_blur_partial",
+            "raw_video_path": r"C:\work_tickets\blur_detect_v2\input\video_raw.mp4",
+            "processed_video_path": r"C:\work_tickets\blur_detect_v2\input\video_blur_partial.mp4",
+            "target_region_source_mode": "MANUAL_CSV",
+            "manual_target_regions_csv_path": r"C:\work_tickets\blur_detect_v2\input\video_blur_partial_target_regions.csv",
+            "case_note": "Current partial blur test case"
+        }
+    ])
+
+    template_df.to_csv(
+        BATCH_CASES_CSV,
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+    print("====================================================")
+    print("V4.0 TEMPLATE BATCH CSV CREATED")
+    print("====================================================")
+    print(BATCH_CASES_CSV)
+    print("")
+    print("Edit this CSV to add more cases, then rerun this cell.")
+
+
+#================================================================
+# HELPERS
+#================================================================
+
+def normalize_bool_value(value):
+    return str(value).strip().lower() in ["true", "1", "yes", "y"]
+
+
+def normalize_bool_series(series):
+    return (
+        series
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin(["true", "1", "yes", "y"])
+    )
+
+
+def safe_value(obj, default=""):
+    if obj is None:
+        return default
+
+    try:
+        if pd.isna(obj):
+            return default
+    except Exception:
+        pass
+
+    return obj
+
+
+def sanitize_for_folder_name(value):
+    value = str(value)
+    invalid_chars = ['\\', '/', ':', '*', '?', '"', '<', '>', '|', ' ']
+
+    for char in invalid_chars:
+        value = value.replace(char, "_")
+
+    return value
+
+
+def convert_for_json_batch(obj):
+    if obj is None:
+        return None
+
+    if isinstance(obj, dict):
+        return {str(k): convert_for_json_batch(v) for k, v in obj.items()}
+
+    if isinstance(obj, list):
+        return [convert_for_json_batch(v) for v in obj]
+
+    if isinstance(obj, tuple):
+        return [convert_for_json_batch(v) for v in obj]
+
+    if hasattr(obj, "item"):
+        try:
+            return obj.item()
+        except Exception:
+            pass
+
+    try:
+        if pd.isna(obj):
+            return None
+    except Exception:
+        pass
+
+    return obj
+
+
+def extract_summary_field(summary, section, key, default=None):
+    try:
+        return summary.get(section, {}).get(key, default)
+    except Exception:
+        return default
+
+
+#================================================================
+# BATCH TARGET LOADER OVERRIDE
+#================================================================
+# This supports both:
+#   MANUAL_CSV
+#   AUTO_BOOTSTRAP_FROM_BEST_TRACK
+#
+# It replaces the target loader in notebook runtime for V4.0 batch use.
+
+def load_or_build_target_regions(
+    df_region_report,
+    df_track_report,
+    frame_width,
+    frame_height
+):
+    global TARGET_REGION_SOURCE_MODE
+    global MANUAL_TARGET_REGIONS_CSV_PATH
+
+    if TARGET_REGION_SOURCE_MODE == "MANUAL_CSV":
+        if not os.path.exists(MANUAL_TARGET_REGIONS_CSV_PATH):
+            raise FileNotFoundError(
+                f"Manual target CSV not found:\n{MANUAL_TARGET_REGIONS_CSV_PATH}"
+            )
+
+        target_df = pd.read_csv(MANUAL_TARGET_REGIONS_CSV_PATH)
+
+        required_columns = [
+            "frame_number",
+            "target_id",
+            "target_label",
+            "x1",
+            "y1",
+            "x2",
+            "y2"
+        ]
+
+        for column in required_columns:
+            if column not in target_df.columns:
+                raise ValueError(
+                    f"Manual target CSV is missing required column: {column}"
+                )
+
+        if "is_active" in target_df.columns:
+            active_mask = normalize_bool_series(target_df["is_active"])
+        else:
+            active_mask = pd.Series([True] * len(target_df))
+
+        if "manual_review_decision" in target_df.columns:
+            keep_mask = (
+                target_df["manual_review_decision"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .ne("IGNORE")
+            )
+        else:
+            keep_mask = pd.Series([True] * len(target_df))
+
+        target_df = target_df[active_mask & keep_mask].copy()
+
+        if "source" not in target_df.columns:
+            target_df["source"] = "MANUAL_CSV"
+        else:
+            target_df["source"] = target_df["source"].astype(str) + "+MANUAL_CSV_BATCH_VALIDATION"
+
+        target_df["v4_0_target_source_mode"] = "MANUAL_CSV"
+        target_df["v4_0_used_for_batch_validation"] = True
+
+        return target_df, None, "MANUAL_CSV_LOADED_AND_FILTERED"
+
+    if TARGET_REGION_SOURCE_MODE == "AUTO_BOOTSTRAP_FROM_BEST_TRACK":
+        target_df, selected_track_id = build_auto_target_regions_from_track(
+            df_region_report=df_region_report,
+            df_track_report=df_track_report,
+            frame_width=frame_width,
+            frame_height=frame_height
+        )
+
+        return target_df, selected_track_id, "AUTO_BOOTSTRAP_FROM_BEST_TRACK"
+
+    raise ValueError(
+        f"Unsupported TARGET_REGION_SOURCE_MODE: {TARGET_REGION_SOURCE_MODE}"
+    )
+
+
+#================================================================
+# GLOBAL PATH SETTER FOR EACH CASE
+#================================================================
+
+def configure_case_globals(case_row):
+    global PROCESSED_VIDEO_FILE_NAME
+    global RAW_VIDEO_PATH
+    global PROCESSED_VIDEO_PATH
+    global OUTPUT_DIR
+    global OUTPUT_VERSION
+
+    global OUTPUT_ANNOTATED_VIDEO
+    global OUTPUT_FRAME_REPORT
+    global OUTPUT_REGION_REPORT
+    global OUTPUT_REJECTED_REGION_REPORT
+    global OUTPUT_TRACK_REPORT
+    global OUTPUT_TARGET_REGIONS_USED
+    global OUTPUT_TARGET_VALIDATION_REPORT
+    global OUTPUT_SUMMARY_TXT
+    global OUTPUT_SUMMARY_JSON
+
+    global RAW_FRAMES_DIR
+    global PROCESSED_FRAMES_DIR
+    global ANNOTATED_FRAMES_DIR
+    global REGION_CROPS_DIR
+    global REJECTED_REGION_CROPS_DIR
+    global TARGET_CROPS_DIR
+
+    global TARGET_REGION_SOURCE_MODE
+    global MANUAL_TARGET_REGIONS_CSV_PATH
+
+    case_id = str(case_row["case_id"])
+    processed_name = str(case_row["processed_video_file_name"])
+
+    PROCESSED_VIDEO_FILE_NAME = processed_name
+    RAW_VIDEO_PATH = str(case_row["raw_video_path"])
+    PROCESSED_VIDEO_PATH = str(case_row["processed_video_path"])
+
+    OUTPUT_VERSION = "v4_0"
+
+    case_folder_name = (
+        f"{sanitize_for_folder_name(case_id)}"
+        f"__{sanitize_for_folder_name(processed_name)}"
+    )
+
+    OUTPUT_DIR = os.path.join(
+        BATCH_OUTPUT_ROOT,
+        case_folder_name
+    )
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    OUTPUT_ANNOTATED_VIDEO = os.path.join(
+        OUTPUT_DIR,
+        f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_annotated_video.mp4"
+    )
+
+    OUTPUT_FRAME_REPORT = os.path.join(
+        OUTPUT_DIR,
+        f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_frame_report.csv"
+    )
+
+    OUTPUT_REGION_REPORT = os.path.join(
+        OUTPUT_DIR,
+        f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_region_report.csv"
+    )
+
+    OUTPUT_REJECTED_REGION_REPORT = os.path.join(
+        OUTPUT_DIR,
+        f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_rejected_region_report.csv"
+    )
+
+    OUTPUT_TRACK_REPORT = os.path.join(
+        OUTPUT_DIR,
+        f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_track_report.csv"
+    )
+
+    OUTPUT_TARGET_REGIONS_USED = os.path.join(
+        OUTPUT_DIR,
+        f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_target_regions_used.csv"
+    )
+
+    OUTPUT_TARGET_VALIDATION_REPORT = os.path.join(
+        OUTPUT_DIR,
+        f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_target_validation_report.csv"
+    )
+
+    OUTPUT_SUMMARY_TXT = os.path.join(
+        OUTPUT_DIR,
+        f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_summary.txt"
+    )
+
+    OUTPUT_SUMMARY_JSON = os.path.join(
+        OUTPUT_DIR,
+        f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_summary.json"
+    )
+
+    RAW_FRAMES_DIR = os.path.join(OUTPUT_DIR, "raw_frames")
+    PROCESSED_FRAMES_DIR = os.path.join(OUTPUT_DIR, "processed_frames")
+    ANNOTATED_FRAMES_DIR = os.path.join(OUTPUT_DIR, "annotated_frames")
+    REGION_CROPS_DIR = os.path.join(OUTPUT_DIR, "region_crops")
+    REJECTED_REGION_CROPS_DIR = os.path.join(OUTPUT_DIR, "rejected_region_crops")
+    TARGET_CROPS_DIR = os.path.join(OUTPUT_DIR, "target_crops")
+
+    os.makedirs(RAW_FRAMES_DIR, exist_ok=True)
+    os.makedirs(PROCESSED_FRAMES_DIR, exist_ok=True)
+    os.makedirs(ANNOTATED_FRAMES_DIR, exist_ok=True)
+    os.makedirs(REGION_CROPS_DIR, exist_ok=True)
+    os.makedirs(REJECTED_REGION_CROPS_DIR, exist_ok=True)
+    os.makedirs(TARGET_CROPS_DIR, exist_ok=True)
+
+    TARGET_REGION_SOURCE_MODE = str(
+        safe_value(
+            case_row.get("target_region_source_mode", "MANUAL_CSV"),
+            "MANUAL_CSV"
+        )
+    )
+
+    MANUAL_TARGET_REGIONS_CSV_PATH = str(
+        safe_value(
+            case_row.get("manual_target_regions_csv_path", ""),
+            ""
+        )
+    )
+
+    return {
+        "case_id": case_id,
+        "processed_video_file_name": processed_name,
+        "output_dir": OUTPUT_DIR
+    }
+
+
+#================================================================
+# MAIN V4.0 BATCH RUNNER
+#================================================================
+
+def run_v4_0_batch_processing():
+    batch_cases_df = pd.read_csv(BATCH_CASES_CSV)
+
+    required_columns = [
+        "enabled",
+        "case_id",
+        "processed_video_file_name",
+        "raw_video_path",
+        "processed_video_path",
+        "target_region_source_mode",
+        "manual_target_regions_csv_path"
+    ]
+
+    for column in required_columns:
+        if column not in batch_cases_df.columns:
+            raise ValueError(
+                f"Batch cases CSV is missing required column: {column}"
+            )
+
+    enabled_mask = batch_cases_df["enabled"].apply(normalize_bool_value)
+    enabled_cases_df = batch_cases_df[enabled_mask].copy()
+
+    batch_rows = []
+    batch_log_lines = []
+
+    batch_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    print("====================================================")
+    print("V4.0 BATCH PROCESSING STARTED")
+    print("====================================================")
+    print(f"Batch cases CSV: {BATCH_CASES_CSV}")
+    print(f"Enabled cases: {len(enabled_cases_df)}")
+    print(f"Batch output root: {BATCH_OUTPUT_ROOT}")
+
+    batch_log_lines.append("====================================================")
+    batch_log_lines.append("V4.0 BATCH PROCESSING LOG")
+    batch_log_lines.append("====================================================")
+    batch_log_lines.append(f"Started at: {batch_started_at}")
+    batch_log_lines.append(f"Batch cases CSV: {BATCH_CASES_CSV}")
+    batch_log_lines.append(f"Enabled cases: {len(enabled_cases_df)}")
+    batch_log_lines.append("")
+
+    for batch_index, (_, case_row) in enumerate(enabled_cases_df.iterrows(), start=1):
+        case_id = str(case_row["case_id"])
+
+        print("\n====================================================")
+        print(f"RUNNING CASE {batch_index}/{len(enabled_cases_df)}: {case_id}")
+        print("====================================================")
+
+        case_info = configure_case_globals(case_row)
+
+        case_result = {
+            "case_id": case_id,
+            "processed_video_file_name": case_info["processed_video_file_name"],
+            "raw_video_path": RAW_VIDEO_PATH,
+            "processed_video_path": PROCESSED_VIDEO_PATH,
+            "target_region_source_mode": TARGET_REGION_SOURCE_MODE,
+            "manual_target_regions_csv_path": MANUAL_TARGET_REGIONS_CSV_PATH,
+            "output_dir": OUTPUT_DIR,
+            "case_status": "UNKNOWN",
+            "error_message": "",
+            "final_result": "",
+            "final_reason": "",
+            "frames_checked": 0,
+            "frames_with_detected_processing": 0,
+            "frames_without_detected_processing": 0,
+            "processing_coverage_percent": 0.0,
+            "failed_frame_count": 0,
+            "failed_frames": [],
+            "total_targets_checked": 0,
+            "targets_covered_count": 0,
+            "targets_failed_count": 0,
+            "target_coverage_percent": 0.0,
+            "target_failed_frames": [],
+            "total_candidate_regions": 0,
+            "total_accepted_regions": 0,
+            "total_rejected_regions": 0,
+            "unique_tracks_count": 0,
+            "clean_tracks_with_gaps_count": 0,
+            "clean_track_gap_frames": [],
+            "summary_json": OUTPUT_SUMMARY_JSON,
+            "summary_txt": OUTPUT_SUMMARY_TXT,
+            "annotated_video": OUTPUT_ANNOTATED_VIDEO,
+            "frame_report_csv": OUTPUT_FRAME_REPORT,
+            "region_report_csv": OUTPUT_REGION_REPORT,
+            "track_report_csv": OUTPUT_TRACK_REPORT,
+            "target_validation_report_csv": OUTPUT_TARGET_VALIDATION_REPORT
+        }
+
+        try:
+            if not os.path.exists(RAW_VIDEO_PATH):
+                raise FileNotFoundError(f"Raw video not found: {RAW_VIDEO_PATH}")
+
+            if not os.path.exists(PROCESSED_VIDEO_PATH):
+                raise FileNotFoundError(f"Processed video not found: {PROCESSED_VIDEO_PATH}")
+
+            if TARGET_REGION_SOURCE_MODE == "MANUAL_CSV":
+                if not os.path.exists(MANUAL_TARGET_REGIONS_CSV_PATH):
+                    raise FileNotFoundError(
+                        f"Manual target CSV not found: {MANUAL_TARGET_REGIONS_CSV_PATH}"
+                    )
+
+            (
+                df_frame_report,
+                df_region_report,
+                df_rejected_region_report,
+                df_track_report,
+                df_target_regions,
+                df_target_validation_report,
+                case_summary
+            ) = verify_video_level_v3_0(
+                RAW_VIDEO_PATH,
+                PROCESSED_VIDEO_PATH
+            )
+
+            case_result["case_status"] = "COMPLETED"
+            case_result["final_result"] = case_summary.get("final_result", "")
+            case_result["final_reason"] = case_summary.get("final_reason", "")
+
+            frame_summary = case_summary.get("frame_level_summary", {})
+            target_summary = case_summary.get("target_level_summary", {})
+            fp_summary = case_summary.get("false_positive_filter_summary", {})
+            track_summary = case_summary.get("track_level_summary", {})
+
+            case_result["frames_checked"] = frame_summary.get("frames_checked", 0)
+            case_result["frames_with_detected_processing"] = frame_summary.get("frames_with_detected_processing", 0)
+            case_result["frames_without_detected_processing"] = frame_summary.get("frames_without_detected_processing", 0)
+            case_result["processing_coverage_percent"] = frame_summary.get("processing_coverage_percent", 0.0)
+            case_result["failed_frame_count"] = frame_summary.get("failed_frame_count", 0)
+            case_result["failed_frames"] = frame_summary.get("failed_frames", [])
+
+            case_result["total_targets_checked"] = target_summary.get("total_targets_checked", 0)
+            case_result["targets_covered_count"] = target_summary.get("targets_covered_count", 0)
+            case_result["targets_failed_count"] = target_summary.get("targets_failed_count", 0)
+            case_result["target_coverage_percent"] = target_summary.get("target_coverage_percent", 0.0)
+            case_result["target_failed_frames"] = target_summary.get("target_failed_frames", [])
+
+            case_result["total_candidate_regions"] = fp_summary.get("total_candidate_regions", 0)
+            case_result["total_accepted_regions"] = fp_summary.get("total_accepted_regions", 0)
+            case_result["total_rejected_regions"] = fp_summary.get("total_rejected_regions", 0)
+
+            case_result["unique_tracks_count"] = track_summary.get("unique_tracks_count", 0)
+            case_result["clean_tracks_with_gaps_count"] = track_summary.get("clean_tracks_with_gaps_count", 0)
+            case_result["clean_track_gap_frames"] = track_summary.get("clean_track_gap_frames", [])
+
+            print("\nCASE COMPLETED")
+            print(f"Case ID: {case_id}")
+            print(f"Final result: {case_result['final_result']}")
+            print(f"Target failed frames: {case_result['target_failed_frames']}")
+
+            batch_log_lines.append(f"[COMPLETED] {case_id}")
+            batch_log_lines.append(f"  Final result: {case_result['final_result']}")
+            batch_log_lines.append(f"  Target failed frames: {case_result['target_failed_frames']}")
+            batch_log_lines.append(f"  Output dir: {OUTPUT_DIR}")
+            batch_log_lines.append("")
+
+        except Exception as e:
+            case_result["case_status"] = "ERROR"
+            case_result["error_message"] = str(e)
+
+            print("\nCASE ERROR")
+            print(f"Case ID: {case_id}")
+            print(f"Error: {e}")
+
+            batch_log_lines.append(f"[ERROR] {case_id}")
+            batch_log_lines.append(f"  Error: {e}")
+            batch_log_lines.append("")
+
+        batch_rows.append(case_result)
+
+    batch_summary_df = pd.DataFrame(batch_rows)
+
+    batch_summary_df_for_csv = batch_summary_df.copy()
+
+    list_columns = [
+        "failed_frames",
+        "target_failed_frames",
+        "clean_track_gap_frames"
+    ]
+
+    for column in list_columns:
+        if column in batch_summary_df_for_csv.columns:
+            batch_summary_df_for_csv[column] = batch_summary_df_for_csv[column].apply(
+                lambda x: json.dumps(x, ensure_ascii=False)
+            )
+
+    batch_summary_df_for_csv.to_csv(
+        BATCH_SUMMARY_CSV,
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+    batch_summary_json = {
+        "tool_version": "v4_0",
+        "batch_started_at": batch_started_at,
+        "batch_finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "batch_cases_csv": BATCH_CASES_CSV,
+        "batch_output_root": BATCH_OUTPUT_ROOT,
+        "enabled_case_count": int(len(enabled_cases_df)),
+        "completed_case_count": int((batch_summary_df["case_status"] == "COMPLETED").sum()),
+        "error_case_count": int((batch_summary_df["case_status"] == "ERROR").sum()),
+        "case_results": convert_for_json_batch(batch_rows),
+        "outputs": {
+            "batch_summary_csv": BATCH_SUMMARY_CSV,
+            "batch_summary_json": BATCH_SUMMARY_JSON,
+            "batch_run_log_txt": BATCH_RUN_LOG_TXT
+        }
+    }
+
+    with open(BATCH_SUMMARY_JSON, "w", encoding="utf-8") as f:
+        json.dump(batch_summary_json, f, indent=4, ensure_ascii=False, default=str)
+
+    batch_finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    batch_log_lines.append(f"Finished at: {batch_finished_at}")
+    batch_log_lines.append("")
+    batch_log_lines.append("Batch summary CSV:")
+    batch_log_lines.append(BATCH_SUMMARY_CSV)
+    batch_log_lines.append("")
+    batch_log_lines.append("Batch summary JSON:")
+    batch_log_lines.append(BATCH_SUMMARY_JSON)
+
+    with open(BATCH_RUN_LOG_TXT, "w", encoding="utf-8") as f:
+        f.write("\n".join(batch_log_lines))
+
+    print("\n====================================================")
+    print("V4.0 BATCH PROCESSING SUMMARY")
+    print("====================================================")
+    print(f"Enabled cases: {len(enabled_cases_df)}")
+    print(f"Completed cases: {(batch_summary_df['case_status'] == 'COMPLETED').sum()}")
+    print(f"Error cases: {(batch_summary_df['case_status'] == 'ERROR').sum()}")
+    print("")
+    print("Batch summary CSV:")
+    print(BATCH_SUMMARY_CSV)
+    print("")
+    print("Batch summary JSON:")
+    print(BATCH_SUMMARY_JSON)
+    print("")
+    print("Batch run log:")
+    print(BATCH_RUN_LOG_TXT)
+
+    print("\n====================================================")
+    print("BATCH SUMMARY PREVIEW")
+    print("====================================================")
+
+    preview_columns = [
+        "case_id",
+        "case_status",
+        "final_result",
+        "frames_checked",
+        "processing_coverage_percent",
+        "total_targets_checked",
+        "target_coverage_percent",
+        "target_failed_frames",
+        "output_dir"
+    ]
+
+    existing_preview_columns = [
+        column for column in preview_columns
+        if column in batch_summary_df.columns
+    ]
+
+    print(batch_summary_df[existing_preview_columns])
+
+    return batch_summary_df, batch_summary_json
+
+
+#================================================================
+# RUN V4.0
+#================================================================
+
+df_v4_0_batch_summary, v4_0_batch_summary_json = run_v4_0_batch_processing()

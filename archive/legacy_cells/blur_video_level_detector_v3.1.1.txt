@@ -1,0 +1,810 @@
+# First RUN 3.0, then 3.1 / direct 3.2
+
+#================================================================
+# V3.1.1 - Manual Target Review with Processed-Region Overlay
+#================================================================
+# Purpose:
+#   1. Read the manual target CSV created by V3.1
+#   2. Read detected processed regions from V3.0 region_report.csv
+#   3. Create better review images:
+#        LEFT  = raw frame + target boxes
+#        RIGHT = processed frame + target boxes + processed-region boxes
+#   4. Compute quick target-vs-processed-region overlap preview
+#   5. Create overlay review index CSV
+#
+# This does NOT rerun detection.
+# This does NOT modify the manual target CSV.
+# This helps you visually inspect:
+#   - Is the target box correct?
+#   - Does processed/blurred region cover the target?
+#   - Are there extra processed regions?
+#================================================================
+
+import os
+import cv2
+import numpy as np
+import pandas as pd
+
+
+#================================================================
+# USER SETTINGS
+#================================================================
+
+PROCESSED_VIDEO_FILE_NAME = "video_blur_partial"
+
+PROJECT_ROOT = r"C:\work_tickets\blur_detect_v2"
+
+INPUT_DIR = os.path.join(PROJECT_ROOT, "input")
+
+OUTPUT_DIR = rf"C:\work_tickets\blur_detect_v2\output\video_process\{PROCESSED_VIDEO_FILE_NAME}_results"
+
+MANUAL_TARGET_REGIONS_CSV = os.path.join(
+    INPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_target_regions.csv"
+)
+
+V3_0_REGION_REPORT_CSV = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_v3_0_region_report.csv"
+)
+
+RAW_FRAMES_DIR = os.path.join(OUTPUT_DIR, "raw_frames")
+PROCESSED_FRAMES_DIR = os.path.join(OUTPUT_DIR, "processed_frames")
+
+V3_1_1_OVERLAY_REVIEW_DIR = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_v3_1_1_manual_target_overlay_review"
+)
+
+V3_1_1_OVERLAY_REVIEW_INDEX_CSV = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_v3_1_1_manual_target_overlay_review_index.csv"
+)
+
+V3_1_1_TARGET_OVERLAP_PREVIEW_CSV = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_v3_1_1_target_overlap_preview.csv"
+)
+
+V3_1_1_INSTRUCTIONS_TXT = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_v3_1_1_overlay_review_instructions.txt"
+)
+
+os.makedirs(V3_1_1_OVERLAY_REVIEW_DIR, exist_ok=True)
+
+
+#================================================================
+# TARGET VALIDATION PREVIEW SETTINGS
+#================================================================
+
+MIN_TARGET_IOU_WITH_PROCESSED_REGION = 0.10
+MIN_TARGET_COVERAGE_RATIO = 0.50
+
+
+#================================================================
+# DRAWING SETTINGS
+#================================================================
+
+TARGET_PASS_COLOR = (255, 0, 255)      # magenta
+TARGET_FAIL_COLOR = (0, 0, 255)        # red
+PROCESSED_REGION_COLOR = (0, 255, 0)   # green
+TEXT_COLOR = (255, 255, 255)
+TEXT_BG_COLOR = (0, 0, 0)
+SPACER_COLOR = 255
+
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+
+#================================================================
+# PATH HELPERS
+#================================================================
+
+def find_raw_frame_path(frame_number):
+    return os.path.join(
+        RAW_FRAMES_DIR,
+        f"raw_frame_{frame_number:06d}.png"
+    )
+
+
+def find_processed_frame_path(frame_number):
+    return os.path.join(
+        PROCESSED_FRAMES_DIR,
+        f"{PROCESSED_VIDEO_FILE_NAME}_processed_frame_{frame_number:06d}.png"
+    )
+
+
+#================================================================
+# GEOMETRY HELPERS
+#================================================================
+
+def calculate_iou(box_a, box_b):
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+
+    inter_area = inter_w * inter_h
+
+    area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+    area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+
+    union_area = area_a + area_b - inter_area
+
+    if union_area <= 0:
+        return 0.0
+
+    return inter_area / union_area
+
+
+def calculate_target_coverage_ratio(target_box, processed_box):
+    tx1, ty1, tx2, ty2 = target_box
+    px1, py1, px2, py2 = processed_box
+
+    inter_x1 = max(tx1, px1)
+    inter_y1 = max(ty1, py1)
+    inter_x2 = min(tx2, px2)
+    inter_y2 = min(ty2, py2)
+
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+
+    inter_area = inter_w * inter_h
+
+    target_area = max(0, tx2 - tx1) * max(0, ty2 - ty1)
+
+    if target_area <= 0:
+        return 0.0
+
+    return inter_area / target_area
+
+
+#================================================================
+# DRAW HELPERS
+#================================================================
+
+def draw_label(image, text, x, y, bg_color=TEXT_BG_COLOR, text_color=TEXT_COLOR):
+    font_scale = 0.52
+    thickness = 2
+
+    text_size, _ = cv2.getTextSize(
+        text,
+        FONT,
+        font_scale,
+        thickness
+    )
+
+    text_w, text_h = text_size
+
+    x = int(max(0, x))
+    y = int(max(text_h + 8, y))
+
+    cv2.rectangle(
+        image,
+        (x, y - text_h - 8),
+        (x + text_w + 8, y + 4),
+        bg_color,
+        -1
+    )
+
+    cv2.putText(
+        image,
+        text,
+        (x + 4, y - 4),
+        FONT,
+        font_scale,
+        text_color,
+        thickness,
+        cv2.LINE_AA
+    )
+
+
+def draw_target_box(image, target_row, target_status):
+    x1 = int(target_row["x1"])
+    y1 = int(target_row["y1"])
+    x2 = int(target_row["x2"])
+    y2 = int(target_row["y2"])
+
+    target_id = int(target_row["target_id"])
+    target_label = str(target_row["target_label"])
+
+    if str(target_status).startswith("PASS"):
+        color = TARGET_PASS_COLOR
+    else:
+        color = TARGET_FAIL_COLOR
+
+    cv2.rectangle(
+        image,
+        (x1, y1),
+        (x2, y2),
+        color,
+        3
+    )
+
+    label = f"TARGET {target_id}: {target_label} | {target_status}"
+
+    draw_label(
+        image=image,
+        text=label,
+        x=x1,
+        y=max(30, y1 - 8),
+        bg_color=color,
+        text_color=TEXT_COLOR
+    )
+
+    return image
+
+
+def draw_processed_region_box(image, region_row):
+    x1 = int(region_row["x1"])
+    y1 = int(region_row["y1"])
+    x2 = int(region_row["x2"])
+    y2 = int(region_row["y2"])
+
+    track_id = int(region_row["track_id"])
+    global_region_id = int(region_row["global_region_id"])
+    severity_score = float(region_row["severity_score"])
+    severity_label = str(region_row["severity_label"])
+
+    cv2.rectangle(
+        image,
+        (x1, y1),
+        (x2, y2),
+        PROCESSED_REGION_COLOR,
+        2
+    )
+
+    label = (
+        f"PROC R{global_region_id} "
+        f"T{track_id} "
+        f"S:{round(severity_score, 2)} "
+        f"{severity_label}"
+    )
+
+    draw_label(
+        image=image,
+        text=label,
+        x=x1,
+        y=max(30, y2 + 20),
+        bg_color=PROCESSED_REGION_COLOR,
+        text_color=(0, 0, 0)
+    )
+
+    return image
+
+
+def draw_frame_header(image, text):
+    draw_label(
+        image=image,
+        text=text,
+        x=20,
+        y=35,
+        bg_color=(50, 50, 50),
+        text_color=TEXT_COLOR
+    )
+
+
+def make_side_by_side_overlay_review(
+    raw_image,
+    processed_image,
+    frame_number,
+    targets_for_frame,
+    regions_for_frame,
+    target_status_by_id
+):
+    raw_drawn = raw_image.copy()
+    processed_drawn = processed_image.copy()
+
+    # Draw target boxes on both raw and processed sides
+    for _, target_row in targets_for_frame.iterrows():
+        target_id = int(target_row["target_id"])
+        target_status = target_status_by_id.get(target_id, "UNKNOWN_TARGET_STATUS")
+
+        raw_drawn = draw_target_box(
+            image=raw_drawn,
+            target_row=target_row,
+            target_status=target_status
+        )
+
+        processed_drawn = draw_target_box(
+            image=processed_drawn,
+            target_row=target_row,
+            target_status=target_status
+        )
+
+    # Draw detected processed regions only on processed side
+    for _, region_row in regions_for_frame.iterrows():
+        processed_drawn = draw_processed_region_box(
+            image=processed_drawn,
+            region_row=region_row
+        )
+
+    h1, w1 = raw_drawn.shape[:2]
+    h2, w2 = processed_drawn.shape[:2]
+
+    if h1 != h2 or w1 != w2:
+        processed_drawn = cv2.resize(processed_drawn, (w1, h1))
+
+    spacer_width = 20
+    spacer = SPACER_COLOR * np.ones((h1, spacer_width, 3), dtype=raw_drawn.dtype)
+
+    combined = cv2.hconcat([raw_drawn, spacer, processed_drawn])
+
+    header_text = (
+        f"Frame {frame_number} | "
+        f"LEFT: RAW + TARGET | "
+        f"RIGHT: PROCESSED + TARGET + DETECTED PROCESSED REGIONS"
+    )
+
+    draw_frame_header(
+        image=combined,
+        text=header_text
+    )
+
+    legend_y = 70
+
+    draw_label(
+        image=combined,
+        text="MAGENTA/RED = TARGET REGION",
+        x=20,
+        y=legend_y,
+        bg_color=TARGET_PASS_COLOR,
+        text_color=TEXT_COLOR
+    )
+
+    draw_label(
+        image=combined,
+        text="GREEN = DETECTED PROCESSED / BLURRED REGION",
+        x=350,
+        y=legend_y,
+        bg_color=PROCESSED_REGION_COLOR,
+        text_color=(0, 0, 0)
+    )
+
+    return combined
+
+
+#================================================================
+# ACTIVE ROW HELPER
+#================================================================
+
+def filter_active_targets(target_df):
+    if "is_active" not in target_df.columns:
+        return target_df.copy()
+
+    active_values = (
+        target_df["is_active"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes", "y"])
+    )
+
+    return target_df[active_values].copy()
+
+
+#================================================================
+# TARGET OVERLAP PREVIEW
+#================================================================
+
+def compute_target_overlap_preview(target_df, region_df):
+    preview_rows = []
+
+    for _, target_row in target_df.iterrows():
+        frame_number = int(target_row["frame_number"])
+        target_id = int(target_row["target_id"])
+        target_label = str(target_row["target_label"])
+
+        tx1 = int(target_row["x1"])
+        ty1 = int(target_row["y1"])
+        tx2 = int(target_row["x2"])
+        ty2 = int(target_row["y2"])
+
+        target_box = (tx1, ty1, tx2, ty2)
+
+        regions_for_frame = region_df[
+            region_df["frame_number"] == frame_number
+        ].copy()
+
+        best_iou = 0.0
+        best_target_coverage_ratio = 0.0
+        best_region_global_id = None
+        best_region_track_id = None
+        best_region_severity_score = 0.0
+        best_region_severity_label = ""
+
+        for _, region_row in regions_for_frame.iterrows():
+            processed_box = (
+                int(region_row["x1"]),
+                int(region_row["y1"]),
+                int(region_row["x2"]),
+                int(region_row["y2"])
+            )
+
+            iou = calculate_iou(target_box, processed_box)
+            coverage_ratio = calculate_target_coverage_ratio(target_box, processed_box)
+
+            if coverage_ratio > best_target_coverage_ratio:
+                best_target_coverage_ratio = coverage_ratio
+                best_iou = iou
+                best_region_global_id = int(region_row["global_region_id"])
+                best_region_track_id = int(region_row["track_id"])
+                best_region_severity_score = float(region_row["severity_score"])
+                best_region_severity_label = str(region_row["severity_label"])
+
+        is_target_covered = (
+            best_iou >= MIN_TARGET_IOU_WITH_PROCESSED_REGION
+            or best_target_coverage_ratio >= MIN_TARGET_COVERAGE_RATIO
+        )
+
+        if len(regions_for_frame) == 0:
+            target_status = "FAIL_NO_PROCESSED_REGION_IN_FRAME"
+        elif is_target_covered:
+            target_status = "PASS_TARGET_COVERED"
+        else:
+            target_status = "FAIL_TARGET_NOT_COVERED"
+
+        preview_rows.append({
+            "processed_video_file_name": PROCESSED_VIDEO_FILE_NAME,
+            "frame_number": frame_number,
+            "target_id": target_id,
+            "target_label": target_label,
+            "target_x1": tx1,
+            "target_y1": ty1,
+            "target_x2": tx2,
+            "target_y2": ty2,
+            "num_processed_regions_in_frame": int(len(regions_for_frame)),
+            "best_matching_region_global_id": best_region_global_id,
+            "best_matching_region_track_id": best_region_track_id,
+            "best_iou_with_processed_region": round(float(best_iou), 6),
+            "best_target_coverage_ratio": round(float(best_target_coverage_ratio), 6),
+            "best_region_severity_score": round(float(best_region_severity_score), 2),
+            "best_region_severity_label": best_region_severity_label,
+            "is_target_covered": bool(is_target_covered),
+            "target_status": target_status
+        })
+
+    return pd.DataFrame(preview_rows)
+
+
+#================================================================
+# MAIN V3.1.1 WORKFLOW
+#================================================================
+
+def create_manual_target_overlay_review():
+    if not os.path.exists(MANUAL_TARGET_REGIONS_CSV):
+        raise FileNotFoundError(
+            f"Manual target CSV not found:\n{MANUAL_TARGET_REGIONS_CSV}\n\n"
+            "Run V3.1 first."
+        )
+
+    if not os.path.exists(V3_0_REGION_REPORT_CSV):
+        raise FileNotFoundError(
+            f"V3.0 region report not found:\n{V3_0_REGION_REPORT_CSV}\n\n"
+            "Run V3.0 first."
+        )
+
+    target_df_all = pd.read_csv(MANUAL_TARGET_REGIONS_CSV)
+    region_df = pd.read_csv(V3_0_REGION_REPORT_CSV)
+
+    required_target_columns = [
+        "frame_number",
+        "target_id",
+        "target_label",
+        "x1",
+        "y1",
+        "x2",
+        "y2"
+    ]
+
+    required_region_columns = [
+        "frame_number",
+        "global_region_id",
+        "track_id",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "severity_score",
+        "severity_label"
+    ]
+
+    for column in required_target_columns:
+        if column not in target_df_all.columns:
+            raise ValueError(
+                f"Manual target CSV is missing required column: {column}"
+            )
+
+    for column in required_region_columns:
+        if column not in region_df.columns:
+            raise ValueError(
+                f"Region report CSV is missing required column: {column}"
+            )
+
+    target_df = filter_active_targets(target_df_all)
+
+    target_overlap_preview_df = compute_target_overlap_preview(
+        target_df=target_df,
+        region_df=region_df
+    )
+
+    target_overlap_preview_df.to_csv(
+        V3_1_1_TARGET_OVERLAP_PREVIEW_CSV,
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+    review_rows = []
+
+    frame_numbers = sorted(target_df["frame_number"].unique().astype(int).tolist())
+
+    for frame_number in frame_numbers:
+        raw_frame_path = find_raw_frame_path(frame_number)
+        processed_frame_path = find_processed_frame_path(frame_number)
+
+        if not os.path.exists(raw_frame_path):
+            review_rows.append({
+                "frame_number": frame_number,
+                "overlay_review_image_path": "",
+                "status": "RAW_FRAME_NOT_FOUND",
+                "raw_frame_path": raw_frame_path,
+                "processed_frame_path": processed_frame_path,
+                "num_targets_in_frame": 0,
+                "num_processed_regions_in_frame": 0,
+                "frame_target_statuses": ""
+            })
+            continue
+
+        if not os.path.exists(processed_frame_path):
+            review_rows.append({
+                "frame_number": frame_number,
+                "overlay_review_image_path": "",
+                "status": "PROCESSED_FRAME_NOT_FOUND",
+                "raw_frame_path": raw_frame_path,
+                "processed_frame_path": processed_frame_path,
+                "num_targets_in_frame": 0,
+                "num_processed_regions_in_frame": 0,
+                "frame_target_statuses": ""
+            })
+            continue
+
+        raw_image = cv2.imread(raw_frame_path)
+        processed_image = cv2.imread(processed_frame_path)
+
+        if raw_image is None or processed_image is None:
+            review_rows.append({
+                "frame_number": frame_number,
+                "overlay_review_image_path": "",
+                "status": "IMAGE_READ_FAILED",
+                "raw_frame_path": raw_frame_path,
+                "processed_frame_path": processed_frame_path,
+                "num_targets_in_frame": 0,
+                "num_processed_regions_in_frame": 0,
+                "frame_target_statuses": ""
+            })
+            continue
+
+        targets_for_frame = target_df[
+            target_df["frame_number"] == frame_number
+        ].copy()
+
+        regions_for_frame = region_df[
+            region_df["frame_number"] == frame_number
+        ].copy()
+
+        target_preview_for_frame = target_overlap_preview_df[
+            target_overlap_preview_df["frame_number"] == frame_number
+        ].copy()
+
+        target_status_by_id = {}
+
+        for _, row in target_preview_for_frame.iterrows():
+            target_status_by_id[int(row["target_id"])] = str(row["target_status"])
+
+        overlay_review_image = make_side_by_side_overlay_review(
+            raw_image=raw_image,
+            processed_image=processed_image,
+            frame_number=frame_number,
+            targets_for_frame=targets_for_frame,
+            regions_for_frame=regions_for_frame,
+            target_status_by_id=target_status_by_id
+        )
+
+        overlay_review_image_path = os.path.join(
+            V3_1_1_OVERLAY_REVIEW_DIR,
+            f"{PROCESSED_VIDEO_FILE_NAME}_v3_1_1_frame_{frame_number:06d}_overlay_review.png"
+        )
+
+        cv2.imwrite(overlay_review_image_path, overlay_review_image)
+
+        frame_target_statuses = "; ".join(
+            [
+                f"T{int(row['target_id'])}:{row['target_status']}"
+                for _, row in target_preview_for_frame.iterrows()
+            ]
+        )
+
+        review_rows.append({
+            "frame_number": int(frame_number),
+            "overlay_review_image_path": overlay_review_image_path,
+            "status": "OVERLAY_REVIEW_IMAGE_CREATED",
+            "raw_frame_path": raw_frame_path,
+            "processed_frame_path": processed_frame_path,
+            "num_targets_in_frame": int(len(targets_for_frame)),
+            "num_processed_regions_in_frame": int(len(regions_for_frame)),
+            "frame_target_statuses": frame_target_statuses
+        })
+
+    review_index_df = pd.DataFrame(review_rows)
+
+    review_index_df.to_csv(
+        V3_1_1_OVERLAY_REVIEW_INDEX_CSV,
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+    total_targets = int(len(target_overlap_preview_df))
+    targets_covered = int(target_overlap_preview_df["is_target_covered"].sum()) if total_targets > 0 else 0
+    targets_failed = int(total_targets - targets_covered)
+
+    failed_frames = []
+
+    if total_targets > 0:
+        failed_frames = sorted(
+            target_overlap_preview_df[
+                target_overlap_preview_df["is_target_covered"] == False
+            ]["frame_number"].unique().astype(int).tolist()
+        )
+
+    if total_targets > 0:
+        target_coverage_percent = round(targets_covered * 100.0 / total_targets, 2)
+    else:
+        target_coverage_percent = 0.0
+
+    instructions = f"""
+====================================================
+V3.1.1 MANUAL TARGET OVERLAY REVIEW
+====================================================
+
+This review overlays:
+
+LEFT:
+Raw frame + target boxes
+
+RIGHT:
+Processed frame + target boxes + detected processed-region boxes
+
+----------------------------------------------------
+COLOR MEANING
+----------------------------------------------------
+
+MAGENTA / RED:
+Target region from manual target CSV
+
+GREEN:
+Detected processed / blurred region from V3.0 region_report.csv
+
+----------------------------------------------------
+INPUT FILES
+----------------------------------------------------
+
+Manual target CSV:
+{MANUAL_TARGET_REGIONS_CSV}
+
+Processed region report:
+{V3_0_REGION_REPORT_CSV}
+
+----------------------------------------------------
+OUTPUT FILES
+----------------------------------------------------
+
+Overlay review images:
+{V3_1_1_OVERLAY_REVIEW_DIR}
+
+Overlay review index CSV:
+{V3_1_1_OVERLAY_REVIEW_INDEX_CSV}
+
+Target overlap preview CSV:
+{V3_1_1_TARGET_OVERLAP_PREVIEW_CSV}
+
+Instructions TXT:
+{V3_1_1_INSTRUCTIONS_TXT}
+
+----------------------------------------------------
+QUICK TARGET COVERAGE PREVIEW
+----------------------------------------------------
+
+Total targets:
+{total_targets}
+
+Targets covered:
+{targets_covered}
+
+Targets failed:
+{targets_failed}
+
+Target coverage:
+{target_coverage_percent} %
+
+Failed frames:
+{failed_frames}
+
+----------------------------------------------------
+HOW TO REVIEW
+----------------------------------------------------
+
+1. Open the overlay review image folder.
+
+2. In each image:
+   - Check whether the target box is correct.
+   - Check whether the green processed region overlaps the target.
+   - Check whether extra processed regions exist.
+
+3. If the target box is wrong, edit:
+
+{MANUAL_TARGET_REGIONS_CSV}
+
+Main columns to edit:
+frame_number, target_id, target_label, x1, y1, x2, y2
+
+4. After review/editing, run V3.2 with MANUAL_CSV mode.
+
+----------------------------------------------------
+IMPORTANT
+----------------------------------------------------
+
+V3.1.1 is a visual review helper.
+It does not replace V3.2.
+
+V3.2 is the official rerun using the manual target CSV.
+====================================================
+"""
+
+    with open(V3_1_1_INSTRUCTIONS_TXT, "w", encoding="utf-8") as f:
+        f.write(instructions)
+
+    print(instructions)
+
+    print("\n====================================================")
+    print("V3.1.1 TARGET OVERLAP PREVIEW")
+    print("====================================================")
+
+    preview_columns = [
+        "frame_number",
+        "target_id",
+        "target_label",
+        "num_processed_regions_in_frame",
+        "best_matching_region_track_id",
+        "best_iou_with_processed_region",
+        "best_target_coverage_ratio",
+        "is_target_covered",
+        "target_status"
+    ]
+
+    if len(target_overlap_preview_df) > 0:
+        print(target_overlap_preview_df[preview_columns].head(50))
+    else:
+        print("No target overlap preview rows generated.")
+
+    print("\n====================================================")
+    print("V3.1.1 OVERLAY REVIEW INDEX")
+    print("====================================================")
+
+    if len(review_index_df) > 0:
+        print(review_index_df.head(50))
+    else:
+        print("No overlay review images generated.")
+
+    return target_overlap_preview_df, review_index_df
+
+
+#================================================================
+# RUN V3.1.1
+#================================================================
+
+df_v3_1_1_target_overlap_preview, df_v3_1_1_overlay_review_index = create_manual_target_overlay_review()

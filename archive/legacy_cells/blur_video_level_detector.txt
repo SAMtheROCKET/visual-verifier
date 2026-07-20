@@ -1,0 +1,623 @@
+#================================================================
+# V1 - Video-Level Anonymization Verification
+#================================================================
+# This is the FIRST clean package-style version.
+#
+# Purpose:
+#   Compare a raw/original video with a processed/anonymized video.
+#   Detect where visual processing happened in each frame.
+#   Draw multiple bounding boxes per frame.
+#   Save annotated output video and CSV report.
+#
+# This V1 does NOT yet include:
+#   1. Temporal tracking
+#   2. Advanced false-positive reduction
+#   3. Severity score per box
+#   4. Full anonymization quality report
+#   5. Full video summary dashboard
+#
+# Those will come later.
+#================================================================
+
+import os
+import cv2
+import numpy as np
+import pandas as pd
+
+
+#================================================================
+# USER SETTINGS
+#================================================================
+
+PROCESSED_VIDEO_FILE_NAME = "video_blur" # CHANGE THE NAME FOR TESTING THIS VIDEO AGAINST RAW VIDEO FILE
+
+RAW_VIDEO_PATH = r"C:\work_tickets\blur_detect_v2\input\video_raw.mp4"
+PROCESSED_VIDEO_PATH = rf"C:\work_tickets\blur_detect_v2\input\{PROCESSED_VIDEO_FILE_NAME}.mp4"
+
+OUTPUT_DIR = rf"C:\work_tickets\blur_detect_v2\output\video_process\{PROCESSED_VIDEO_FILE_NAME}_results"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+OUTPUT_ANNOTATED_VIDEO = os.path.join(OUTPUT_DIR, "v1_annotated_video.mp4")
+OUTPUT_FRAME_REPORT = os.path.join(OUTPUT_DIR, "v1_frame_report.csv")
+OUTPUT_SUMMARY_TXT = os.path.join(OUTPUT_DIR, "v1_summary.txt")
+
+RAW_FRAMES_DIR = os.path.join(OUTPUT_DIR, "raw_frames")
+PROCESSED_FRAMES_DIR = os.path.join(OUTPUT_DIR, "processed_frames")
+ANNOTATED_FRAMES_DIR = os.path.join(OUTPUT_DIR, "annotated_frames")
+
+os.makedirs(RAW_FRAMES_DIR, exist_ok=True)
+os.makedirs(PROCESSED_FRAMES_DIR, exist_ok=True)
+os.makedirs(ANNOTATED_FRAMES_DIR, exist_ok=True)
+
+# Main detection parameters
+DIFF_THRESHOLD = 30          # Pixel difference threshold
+MIN_BOX_AREA = 80            # Ignore very tiny boxes/noise
+MIN_BOX_WIDTH = 6
+MIN_BOX_HEIGHT = 6
+MERGE_KERNEL_SIZE = 9        # Increase to merge nearby pixels into bigger boxes
+BOX_PADDING = 3
+
+# Frame processing
+PROCESS_EVERY_N_FRAMES = 1   # 1 = process every frame. 2 = every 2nd frame, etc.
+MAX_FRAMES = None            # None = process all frames. Example: 100 = first 100 frames only
+
+# Safety expectation
+# True means: if a frame has no detected processing, it will be marked as FAIL.
+EXPECT_PROCESSING_IN_EVERY_FRAME = True
+
+# Save extracted frames
+SAVE_EXTRACTED_FRAMES = True
+
+# Drawing settings
+BOX_COLOR = (0, 255, 0)
+FAIL_COLOR = (0, 0, 255)
+TEXT_COLOR = (0, 255, 255)
+
+
+#================================================================
+# VIDEO METADATA
+#================================================================
+
+def get_video_info(video_path):
+    cap = cv2.VideoCapture(video_path)
+
+    if not cap.isOpened():
+        raise FileNotFoundError(f"Could not open video: {video_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    duration_sec = frame_count / fps if fps and fps > 0 else 0
+
+    cap.release()
+
+    return {
+        "path": video_path,
+        "fps": fps,
+        "frame_count": frame_count,
+        "width": width,
+        "height": height,
+        "duration_sec": duration_sec
+    }
+
+
+#================================================================
+# MULTIPLE BOUNDING BOX DETECTION PER FRAME
+#================================================================
+
+def detect_multiple_processed_regions(raw_frame, processed_frame):
+    """
+    Detect multiple regions where processed_frame differs from raw_frame.
+
+    Returns:
+        boxes: list of dictionaries
+        diff: absolute difference image
+        threshold_mask: binary threshold mask
+        cleaned_mask: morphology-cleaned mask
+    """
+
+    if raw_frame.shape != processed_frame.shape:
+        processed_frame = cv2.resize(
+            processed_frame,
+            (raw_frame.shape[1], raw_frame.shape[0])
+        )
+
+    gray_raw = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2GRAY)
+    gray_processed = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2GRAY)
+
+    diff = cv2.absdiff(gray_raw, gray_processed)
+
+    _, threshold_mask = cv2.threshold(
+        diff,
+        DIFF_THRESHOLD,
+        255,
+        cv2.THRESH_BINARY
+    )
+
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (MERGE_KERNEL_SIZE, MERGE_KERNEL_SIZE)
+    )
+
+    cleaned_mask = cv2.morphologyEx(
+        threshold_mask,
+        cv2.MORPH_CLOSE,
+        kernel
+    )
+
+    cleaned_mask = cv2.dilate(
+        cleaned_mask,
+        kernel,
+        iterations=1
+    )
+
+    contours, _ = cv2.findContours(
+        cleaned_mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    frame_h, frame_w = raw_frame.shape[:2]
+
+    boxes = []
+
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+
+        x1 = max(0, x - BOX_PADDING)
+        y1 = max(0, y - BOX_PADDING)
+        x2 = min(frame_w, x + w + BOX_PADDING)
+        y2 = min(frame_h, y + h + BOX_PADDING)
+
+        box_width = x2 - x1
+        box_height = y2 - y1
+        box_area = box_width * box_height
+
+        if box_area < MIN_BOX_AREA:
+            continue
+
+        if box_width < MIN_BOX_WIDTH or box_height < MIN_BOX_HEIGHT:
+            continue
+
+        diff_crop = diff[y1:y2, x1:x2]
+        threshold_crop = threshold_mask[y1:y2, x1:x2]
+
+        changed_pixels = int(np.sum(threshold_crop > 0))
+        changed_ratio = changed_pixels / box_area if box_area > 0 else 0
+        mean_diff = float(np.mean(diff_crop))
+        max_diff = float(np.max(diff_crop))
+
+        box = {
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "width": box_width,
+            "height": box_height,
+            "area": box_area,
+            "changed_pixels": changed_pixels,
+            "changed_ratio": changed_ratio,
+            "mean_diff": mean_diff,
+            "max_diff": max_diff
+        }
+
+        boxes.append(box)
+
+    boxes = sorted(boxes, key=lambda b: (b["y1"], b["x1"]))
+
+    return boxes, diff, threshold_mask, cleaned_mask
+
+
+#================================================================
+# DRAW BOXES ON FRAME
+#================================================================
+
+def draw_boxes_on_frame(frame, boxes, frame_number, total_frames, frame_status):
+    annotated = frame.copy()
+
+    for idx, box in enumerate(boxes, start=1):
+        x1 = box["x1"]
+        y1 = box["y1"]
+        x2 = box["x2"]
+        y2 = box["y2"]
+
+        cv2.rectangle(
+            annotated,
+            (x1, y1),
+            (x2, y2),
+            BOX_COLOR,
+            2
+        )
+
+        label = f"Box {idx}"
+
+        cv2.putText(
+            annotated,
+            label,
+            (x1, max(20, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            BOX_COLOR,
+            2,
+            cv2.LINE_AA
+        )
+
+    if "FAIL" in frame_status:
+        header_color = FAIL_COLOR
+    else:
+        header_color = TEXT_COLOR
+
+    header_text = (
+        f"Frame {frame_number}/{total_frames} | "
+        f"Detected regions: {len(boxes)} | "
+        f"{frame_status}"
+    )
+
+    cv2.putText(
+        annotated,
+        header_text,
+        (20, 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        header_color,
+        2,
+        cv2.LINE_AA
+    )
+
+    return annotated
+
+
+#================================================================
+# MAIN VIDEO-LEVEL VERIFICATION
+#================================================================
+
+def verify_video_level(raw_video_path, processed_video_path):
+    raw_info = get_video_info(raw_video_path)
+    processed_info = get_video_info(processed_video_path)
+
+    print("====================================================")
+    print("RAW VIDEO INFO")
+    print("====================================================")
+    print(raw_info)
+
+    print("\n====================================================")
+    print("PROCESSED VIDEO INFO")
+    print("====================================================")
+    print(processed_info)
+
+    raw_cap = cv2.VideoCapture(raw_video_path)
+    processed_cap = cv2.VideoCapture(processed_video_path)
+
+    raw_fps = raw_info["fps"]
+    raw_width = raw_info["width"]
+    raw_height = raw_info["height"]
+
+    raw_frame_count = raw_info["frame_count"]
+    processed_frame_count = processed_info["frame_count"]
+
+    total_common_frames = min(raw_frame_count, processed_frame_count)
+
+    if MAX_FRAMES is not None:
+        total_common_frames = min(total_common_frames, MAX_FRAMES)
+
+    if raw_frame_count != processed_frame_count:
+        print("\nWARNING:")
+        print("Raw and processed videos have different frame counts.")
+        print("Only common frames will be checked.")
+
+    if raw_info["fps"] != processed_info["fps"]:
+        print("\nWARNING:")
+        print("Raw and processed videos have different FPS metadata.")
+        print("This V1 compares frames by index, not by timestamp alignment.")
+
+    if raw_info["width"] != processed_info["width"] or raw_info["height"] != processed_info["height"]:
+        print("\nWARNING:")
+        print("Raw and processed videos have different resolutions.")
+        print("Processed frames will be resized to match raw frames.")
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+    video_writer = cv2.VideoWriter(
+        OUTPUT_ANNOTATED_VIDEO,
+        fourcc,
+        raw_fps,
+        (raw_width, raw_height)
+    )
+
+    frame_report_rows = []
+    all_failed_frames = []
+    total_detected_boxes = 0
+    frames_checked = 0
+    frames_with_processing = 0
+    frames_without_processing = 0
+
+    print("\n====================================================")
+    print("STARTING FRAME-BY-FRAME VIDEO VERIFICATION")
+    print("====================================================")
+
+    frame_index = 0
+
+    while frame_index < total_common_frames:
+        ret_raw, raw_frame = raw_cap.read()
+        ret_processed, processed_frame = processed_cap.read()
+
+        if not ret_raw or not ret_processed:
+            break
+
+        frame_number = frame_index + 1
+
+        should_process = (frame_index % PROCESS_EVERY_N_FRAMES == 0)
+
+        if not should_process:
+            frame_index += 1
+            continue
+
+        if processed_frame.shape != raw_frame.shape:
+            processed_frame = cv2.resize(
+                processed_frame,
+                (raw_frame.shape[1], raw_frame.shape[0])
+            )
+
+        boxes, diff, threshold_mask, cleaned_mask = detect_multiple_processed_regions(
+            raw_frame,
+            processed_frame
+        )
+
+        num_boxes = len(boxes)
+        total_detected_boxes += num_boxes
+
+        if num_boxes > 0:
+            frames_with_processing += 1
+            frame_status = "PASS - PROCESSING DETECTED"
+        else:
+            frames_without_processing += 1
+
+            if EXPECT_PROCESSING_IN_EVERY_FRAME:
+                frame_status = "FAIL - NO PROCESSING DETECTED"
+                all_failed_frames.append(frame_number)
+            else:
+                frame_status = "NO PROCESSING DETECTED"
+
+        annotated_frame = draw_boxes_on_frame(
+            processed_frame,
+            boxes,
+            frame_number,
+            total_common_frames,
+            frame_status
+        )
+
+        video_writer.write(annotated_frame)
+
+        if SAVE_EXTRACTED_FRAMES:
+            raw_frame_path = os.path.join(
+                RAW_FRAMES_DIR,
+                f"raw_frame_{frame_number:06d}.png"
+            )
+
+            processed_frame_path = os.path.join(
+                PROCESSED_FRAMES_DIR,
+                f"processed_frame_{frame_number:06d}.png"
+            )
+
+            annotated_frame_path = os.path.join(
+                ANNOTATED_FRAMES_DIR,
+                f"annotated_frame_{frame_number:06d}.png"
+            )
+
+            cv2.imwrite(raw_frame_path, raw_frame)
+            cv2.imwrite(processed_frame_path, processed_frame)
+            cv2.imwrite(annotated_frame_path, annotated_frame)
+
+        if num_boxes > 0:
+            total_changed_pixels = sum(box["changed_pixels"] for box in boxes)
+            total_box_area = sum(box["area"] for box in boxes)
+            avg_mean_diff = float(np.mean([box["mean_diff"] for box in boxes]))
+            max_diff = float(np.max([box["max_diff"] for box in boxes]))
+        else:
+            total_changed_pixels = 0
+            total_box_area = 0
+            avg_mean_diff = 0.0
+            max_diff = 0.0
+
+        frame_area = raw_width * raw_height
+        processed_area_ratio = total_box_area / frame_area if frame_area > 0 else 0.0
+
+        frame_report_rows.append({
+            "frame_number": frame_number,
+            "timestamp_sec": round(frame_index / raw_fps, 4) if raw_fps > 0 else None,
+            "num_detected_boxes": num_boxes,
+            "total_box_area_px": total_box_area,
+            "processed_area_ratio": round(processed_area_ratio, 6),
+            "total_changed_pixels": total_changed_pixels,
+            "avg_mean_diff": round(avg_mean_diff, 4),
+            "max_diff": round(max_diff, 4),
+            "frame_status": frame_status,
+            "box_details": boxes
+        })
+
+        frames_checked += 1
+
+        print(
+            f"Frame {frame_number}/{total_common_frames} | "
+            f"Boxes: {num_boxes} | "
+            f"Status: {frame_status}"
+        )
+
+        frame_index += 1
+
+    raw_cap.release()
+    processed_cap.release()
+    video_writer.release()
+
+    df_frame_report = pd.DataFrame(frame_report_rows)
+    df_frame_report.to_csv(
+        OUTPUT_FRAME_REPORT,
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+    if frames_checked > 0:
+        processing_coverage_percent = frames_with_processing * 100.0 / frames_checked
+        failed_frame_percent = len(all_failed_frames) * 100.0 / frames_checked
+        avg_boxes_per_checked_frame = total_detected_boxes / frames_checked
+    else:
+        processing_coverage_percent = 0.0
+        failed_frame_percent = 0.0
+        avg_boxes_per_checked_frame = 0.0
+
+    summary_text = f"""
+====================================================
+V1 VIDEO-LEVEL ANONYMIZATION VERIFICATION SUMMARY
+====================================================
+
+Raw video:
+{raw_video_path}
+
+Processed video:
+{processed_video_path}
+
+----------------------------------------------------
+VIDEO METADATA
+----------------------------------------------------
+
+Raw FPS:
+{raw_info["fps"]}
+
+Processed FPS:
+{processed_info["fps"]}
+
+Raw frame count:
+{raw_info["frame_count"]}
+
+Processed frame count:
+{processed_info["frame_count"]}
+
+Resolution used:
+{raw_width} x {raw_height}
+
+Total common frames:
+{total_common_frames}
+
+Process every N frames:
+{PROCESS_EVERY_N_FRAMES}
+
+Frames actually checked:
+{frames_checked}
+
+----------------------------------------------------
+FRAME-LEVEL RESULT
+----------------------------------------------------
+
+Frames with detected processing:
+{frames_with_processing}
+
+Frames without detected processing:
+{frames_without_processing}
+
+Processing coverage:
+{round(processing_coverage_percent, 2)} %
+
+Failed frames:
+{all_failed_frames}
+
+Failed frame percentage:
+{round(failed_frame_percent, 2)} %
+
+----------------------------------------------------
+BOX-LEVEL BASIC RESULT
+----------------------------------------------------
+
+Total detected boxes:
+{total_detected_boxes}
+
+Average boxes per checked frame:
+{round(avg_boxes_per_checked_frame, 2)}
+
+----------------------------------------------------
+OUTPUT FILES
+----------------------------------------------------
+
+Annotated video:
+{OUTPUT_ANNOTATED_VIDEO}
+
+Frame report CSV:
+{OUTPUT_FRAME_REPORT}
+
+Summary TXT:
+{OUTPUT_SUMMARY_TXT}
+
+Raw frames folder:
+{RAW_FRAMES_DIR}
+
+Processed frames folder:
+{PROCESSED_FRAMES_DIR}
+
+Annotated frames folder:
+{ANNOTATED_FRAMES_DIR}
+
+----------------------------------------------------
+FINAL V1 INTERPRETATION
+----------------------------------------------------
+"""
+
+    if EXPECT_PROCESSING_IN_EVERY_FRAME and len(all_failed_frames) > 0:
+        summary_text += """
+RESULT: FAIL
+
+Reason:
+At least one checked frame had no detected processing.
+For anonymization safety validation, even one missed frame can be critical.
+"""
+    elif frames_with_processing > 0:
+        summary_text += """
+RESULT: PASS / PROCESSING DETECTED
+
+Reason:
+Processing was detected in the checked frames.
+This V1 only confirms visual difference localization, not semantic privacy safety.
+"""
+    else:
+        summary_text += """
+RESULT: NO PROCESSING DETECTED
+
+Reason:
+No significant visual difference was detected between raw and processed videos.
+"""
+
+    with open(OUTPUT_SUMMARY_TXT, "w", encoding="utf-8") as f:
+        f.write(summary_text)
+
+    print(summary_text)
+
+    print("\n====================================================")
+    print("FRAME REPORT PREVIEW")
+    print("====================================================")
+
+    if len(df_frame_report) > 0:
+        preview_columns = [
+            "frame_number",
+            "timestamp_sec",
+            "num_detected_boxes",
+            "processed_area_ratio",
+            "avg_mean_diff",
+            "max_diff",
+            "frame_status"
+        ]
+
+        print(df_frame_report[preview_columns].head(30))
+    else:
+        print("No frame report generated.")
+
+    return df_frame_report
+
+
+#================================================================
+# RUN V1
+#================================================================
+
+df_v1_frame_report = verify_video_level(
+    RAW_VIDEO_PATH,
+    PROCESSED_VIDEO_PATH
+)

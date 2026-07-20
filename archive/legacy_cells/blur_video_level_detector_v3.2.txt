@@ -1,0 +1,307 @@
+# RUN it after 3.0, 3.1, 3.1.1
+
+#================================================================
+# V3.2 - Manual Target CSV Validation
+#================================================================
+# Purpose:
+#   1. Rerun target-aware validation using manual target_regions.csv
+#   2. Stop using AUTO_BOOTSTRAP target generation
+#   3. Respect is_active and manual_review_decision columns
+#   4. Generate V3.2 outputs
+#
+# IMPORTANT:
+#   This cell assumes the V3.0 full code has already been run in this notebook.
+#   It reuses verify_video_level_v3_0() and helper functions from V3.0.
+#================================================================
+
+import os
+import pandas as pd
+
+
+#================================================================
+# BASIC SAFETY CHECK
+#================================================================
+
+if "verify_video_level_v3_0" not in globals():
+    raise RuntimeError(
+        "verify_video_level_v3_0() is not available in this notebook.\n"
+        "Please run the full V3.0 cell first, then run this V3.2 cell."
+    )
+
+
+#================================================================
+# USER SETTINGS
+#================================================================
+
+PROCESSED_VIDEO_FILE_NAME = "video_blur_partial"
+
+RAW_VIDEO_PATH = r"C:\work_tickets\blur_detect_v2\input\video_raw.mp4"
+PROCESSED_VIDEO_PATH = rf"C:\work_tickets\blur_detect_v2\input\{PROCESSED_VIDEO_FILE_NAME}.mp4"
+
+OUTPUT_DIR = rf"C:\work_tickets\blur_detect_v2\output\video_process\{PROCESSED_VIDEO_FILE_NAME}_results"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+OUTPUT_VERSION = "v3_2"
+
+TARGET_REGION_SOURCE_MODE = "MANUAL_CSV"
+
+MANUAL_TARGET_REGIONS_CSV_PATH = rf"C:\work_tickets\blur_detect_v2\input\{PROCESSED_VIDEO_FILE_NAME}_target_regions.csv"
+
+
+#================================================================
+# V3.2 OUTPUT FILES
+#================================================================
+
+OUTPUT_ANNOTATED_VIDEO = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_annotated_video.mp4"
+)
+
+OUTPUT_FRAME_REPORT = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_frame_report.csv"
+)
+
+OUTPUT_REGION_REPORT = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_region_report.csv"
+)
+
+OUTPUT_REJECTED_REGION_REPORT = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_rejected_region_report.csv"
+)
+
+OUTPUT_TRACK_REPORT = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_track_report.csv"
+)
+
+OUTPUT_TARGET_REGIONS_USED = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_target_regions_used.csv"
+)
+
+OUTPUT_TARGET_VALIDATION_REPORT = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_target_validation_report.csv"
+)
+
+OUTPUT_SUMMARY_TXT = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_summary.txt"
+)
+
+OUTPUT_SUMMARY_JSON = os.path.join(
+    OUTPUT_DIR,
+    f"{PROCESSED_VIDEO_FILE_NAME}_{OUTPUT_VERSION}_summary.json"
+)
+
+
+#================================================================
+# V3.2 OUTPUT FOLDERS
+#================================================================
+
+RAW_FRAMES_DIR = os.path.join(OUTPUT_DIR, "raw_frames")
+PROCESSED_FRAMES_DIR = os.path.join(OUTPUT_DIR, "processed_frames")
+ANNOTATED_FRAMES_DIR = os.path.join(OUTPUT_DIR, "annotated_frames")
+REGION_CROPS_DIR = os.path.join(OUTPUT_DIR, "region_crops")
+REJECTED_REGION_CROPS_DIR = os.path.join(OUTPUT_DIR, "rejected_region_crops")
+TARGET_CROPS_DIR = os.path.join(OUTPUT_DIR, "target_crops")
+
+os.makedirs(RAW_FRAMES_DIR, exist_ok=True)
+os.makedirs(PROCESSED_FRAMES_DIR, exist_ok=True)
+os.makedirs(ANNOTATED_FRAMES_DIR, exist_ok=True)
+os.makedirs(REGION_CROPS_DIR, exist_ok=True)
+os.makedirs(REJECTED_REGION_CROPS_DIR, exist_ok=True)
+os.makedirs(TARGET_CROPS_DIR, exist_ok=True)
+
+
+#================================================================
+# MANUAL CSV CHECK
+#================================================================
+
+if not os.path.exists(MANUAL_TARGET_REGIONS_CSV_PATH):
+    raise FileNotFoundError(
+        f"Manual target CSV not found:\n{MANUAL_TARGET_REGIONS_CSV_PATH}\n\n"
+        "Run V3.1 first to create the manual target CSV."
+    )
+
+manual_target_df = pd.read_csv(MANUAL_TARGET_REGIONS_CSV_PATH)
+
+required_columns = [
+    "frame_number",
+    "target_id",
+    "target_label",
+    "x1",
+    "y1",
+    "x2",
+    "y2"
+]
+
+for column in required_columns:
+    if column not in manual_target_df.columns:
+        raise ValueError(
+            f"Manual target CSV is missing required column: {column}"
+        )
+
+
+def normalize_bool_series(series):
+    return (
+        series
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin(["true", "1", "yes", "y"])
+    )
+
+
+if "is_active" in manual_target_df.columns:
+    active_mask = normalize_bool_series(manual_target_df["is_active"])
+else:
+    active_mask = pd.Series([True] * len(manual_target_df))
+
+if "manual_review_decision" in manual_target_df.columns:
+    keep_mask = (
+        manual_target_df["manual_review_decision"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .ne("IGNORE")
+    )
+else:
+    keep_mask = pd.Series([True] * len(manual_target_df))
+
+usable_manual_target_df = manual_target_df[active_mask & keep_mask].copy()
+
+print("====================================================")
+print("V3.2 MANUAL TARGET CSV CHECK")
+print("====================================================")
+print(f"Manual target CSV: {MANUAL_TARGET_REGIONS_CSV_PATH}")
+print(f"Total target rows: {len(manual_target_df)}")
+print(f"Usable target rows after is_active / IGNORE filtering: {len(usable_manual_target_df)}")
+print("")
+print(usable_manual_target_df.head(30))
+
+
+#================================================================
+# OVERRIDE V3.0 TARGET LOADER FOR V3.2
+#================================================================
+# This patch makes V3.2 respect:
+#   - is_active == True
+#   - manual_review_decision != IGNORE
+#
+# It replaces the V3.0 load_or_build_target_regions() behavior only
+# for this notebook runtime.
+
+def load_or_build_target_regions(
+    df_region_report,
+    df_track_report,
+    frame_width,
+    frame_height
+):
+    if TARGET_REGION_SOURCE_MODE != "MANUAL_CSV":
+        raise ValueError(
+            "V3.2 expects TARGET_REGION_SOURCE_MODE = 'MANUAL_CSV'."
+        )
+
+    if not os.path.exists(MANUAL_TARGET_REGIONS_CSV_PATH):
+        raise FileNotFoundError(
+            f"Manual target CSV not found:\n{MANUAL_TARGET_REGIONS_CSV_PATH}"
+        )
+
+    target_df = pd.read_csv(MANUAL_TARGET_REGIONS_CSV_PATH)
+
+    required_columns = [
+        "frame_number",
+        "target_id",
+        "target_label",
+        "x1",
+        "y1",
+        "x2",
+        "y2"
+    ]
+
+    for column in required_columns:
+        if column not in target_df.columns:
+            raise ValueError(
+                f"Manual target CSV is missing required column: {column}"
+            )
+
+    if "is_active" in target_df.columns:
+        active_mask = normalize_bool_series(target_df["is_active"])
+    else:
+        active_mask = pd.Series([True] * len(target_df))
+
+    if "manual_review_decision" in target_df.columns:
+        keep_mask = (
+            target_df["manual_review_decision"]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .ne("IGNORE")
+        )
+    else:
+        keep_mask = pd.Series([True] * len(target_df))
+
+    target_df = target_df[active_mask & keep_mask].copy()
+
+    if "source" not in target_df.columns:
+        target_df["source"] = "MANUAL_CSV"
+    else:
+        target_df["source"] = target_df["source"].astype(str) + "+MANUAL_CSV_VALIDATION"
+
+    target_df["v3_2_target_source_mode"] = "MANUAL_CSV"
+    target_df["v3_2_used_for_validation"] = True
+
+    return target_df, None, "MANUAL_CSV_LOADED_AND_FILTERED"
+
+
+#================================================================
+# RUN V3.2
+#================================================================
+
+(
+    df_v3_2_frame_report,
+    df_v3_2_region_report,
+    df_v3_2_rejected_region_report,
+    df_v3_2_track_report,
+    df_v3_2_target_regions,
+    df_v3_2_target_validation_report,
+    v3_2_summary
+) = verify_video_level_v3_0(
+    RAW_VIDEO_PATH,
+    PROCESSED_VIDEO_PATH
+)
+
+
+#================================================================
+# V3.2 FINAL CHECK
+#================================================================
+
+print("\n====================================================")
+print("V3.2 FINAL RESULT CHECK")
+print("====================================================")
+
+print("Final result:")
+print(v3_2_summary.get("final_result"))
+
+print("\nFinal reason:")
+print(v3_2_summary.get("final_reason"))
+
+print("\nTarget-level summary:")
+print(v3_2_summary.get("target_level_summary"))
+
+print("\nOutput files:")
+print("Annotated video:", OUTPUT_ANNOTATED_VIDEO)
+print("Frame report:", OUTPUT_FRAME_REPORT)
+print("Region report:", OUTPUT_REGION_REPORT)
+print("Track report:", OUTPUT_TRACK_REPORT)
+print("Target regions used:", OUTPUT_TARGET_REGIONS_USED)
+print("Target validation report:", OUTPUT_TARGET_VALIDATION_REPORT)
+print("Summary TXT:", OUTPUT_SUMMARY_TXT)
+print("Summary JSON:", OUTPUT_SUMMARY_JSON)
+
+print("\nExpected for current test:")
+print("Final result should be FAIL_TARGET_NOT_COVERED")
+print("target_failed_frames should be [4, 8, 12]")

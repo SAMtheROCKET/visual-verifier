@@ -1,0 +1,1115 @@
+#================================================================
+# Detect multiple processed / blurred portions of image
+#================================================================
+
+import os
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+from skimage.metrics import structural_similarity as ssim
+from scipy.stats import wasserstein_distance
+from scipy.stats import pearsonr
+from scipy.stats import entropy
+from imagehash import phash
+from PIL import Image
+from skimage.feature import hog
+from scipy.spatial.distance import cosine
+import pandas as pd
+
+
+#================================================================
+# USER SETTINGS
+#================================================================
+
+image1_path = r'C:\work_tickets\blur_detect_v2\input\blur.PNG'
+image2_path = r'C:\work_tickets\blur_detect_v2\input\raw.png'
+
+output_dir = r'C:\work_tickets\blur_detect_v2\output'
+os.makedirs(output_dir, exist_ok=True)
+
+diff_threshold = 30          # Pixel difference threshold
+min_area = 100               # Ignore very tiny noise regions
+merge_kernel_size = 15       # Higher value merges nearby changed pixels
+box_padding = 5              # Padding around each detected box
+
+blur_sure_threshold = 3      # If blurred image Laplacian variance <= 3% of original
+
+
+#================================================================
+# HELPER FUNCTIONS
+#================================================================
+
+def safe_crop(image, x, y, w, h):
+    """
+    Crop image safely within image boundaries.
+    """
+    img_h, img_w = image.shape[:2]
+
+    x1 = max(0, x)
+    y1 = max(0, y)
+    x2 = min(img_w, x + w)
+    y2 = min(img_h, y + h)
+
+    return image[y1:y2, x1:x2], x1, y1, x2, y2
+
+
+def calculate_blur_percentage(crop1, crop2):
+    """
+    Compare sharpness using Laplacian variance.
+    Lower value means crop2 is more blurred compared to crop1.
+    """
+
+    if crop1.size == 0 or crop2.size == 0:
+        return np.nan, np.nan, np.nan
+
+    gray1 = cv2.cvtColor(crop1, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(crop2, cv2.COLOR_BGR2GRAY)
+
+    laplacian_var_1 = cv2.Laplacian(gray1, cv2.CV_64F).var()
+    laplacian_var_2 = cv2.Laplacian(gray2, cv2.CV_64F).var()
+
+    if laplacian_var_1 == 0:
+        blur_percentage = np.inf
+    else:
+        blur_percentage = laplacian_var_2 * 100 / laplacian_var_1
+
+    return laplacian_var_1, laplacian_var_2, blur_percentage
+
+
+def calculate_crosscheck_metrics(crop1, crop2):
+    """
+    Calculate your cross-check metrics for each detected region.
+    """
+
+    metrics = {}
+
+    if crop1.size == 0 or crop2.size == 0:
+        return None
+
+    gray3 = cv2.cvtColor(crop1, cv2.COLOR_BGR2GRAY)
+    gray4 = cv2.cvtColor(crop2, cv2.COLOR_BGR2GRAY)
+
+    if gray3.shape != gray4.shape:
+        gray4 = cv2.resize(gray4, (gray3.shape[1], gray3.shape[0]))
+
+    gray3_float = gray3.astype(np.float32)
+    gray4_float = gray4.astype(np.float32)
+
+    # MSE
+    mse = ((gray3_float - gray4_float) ** 2).mean()
+
+    # SSIM
+    try:
+        if min(gray3.shape) >= 7:
+            ssi = ssim(gray3, gray4)
+        else:
+            ssi = np.nan
+    except Exception:
+        ssi = np.nan
+
+    # PSNR
+    if mse == 0:
+        psnr = np.inf
+    else:
+        max_pixel_value = 255.0
+        psnr = 20 * np.log10(max_pixel_value / np.sqrt(mse))
+
+    # MAE
+    mae = np.mean(np.abs(gray3_float - gray4_float))
+
+    # Histograms
+    histogram3 = cv2.calcHist([gray3], [0], None, [256], [0, 256])
+    histogram4 = cv2.calcHist([gray4], [0], None, [256], [0, 256])
+
+    histogram3 = histogram3 / (np.sum(histogram3) + 1e-9)
+    histogram4 = histogram4 / (np.sum(histogram4) + 1e-9)
+
+    # Histogram Intersection
+    hist_intersection = np.minimum(histogram3, histogram4)
+    hist_intersection = np.sum(hist_intersection)
+
+    # Earth Mover's Distance
+    emd = wasserstein_distance(histogram3.flatten(), histogram4.flatten())
+
+    # MAPE
+    diff = np.abs(gray3_float - gray4_float)
+    mape = np.mean(diff / (gray3_float + 1e-9)) * 100
+
+    # Entropy based on histogram
+    entropy_image3 = entropy(histogram3.flatten() + 1e-9)
+    entropy_image4 = entropy(histogram4.flatten() + 1e-9)
+
+    entropy_difference = np.abs(entropy_image3 - entropy_image4)
+    max_entropy = np.maximum(entropy_image3, entropy_image4)
+
+    if max_entropy == 0:
+        entropy_percentage_difference = 0
+    else:
+        entropy_percentage_difference = entropy_difference / max_entropy * 100
+
+    entropy_threshold = 0.1
+    entropy_diff_pass = 1 if entropy_difference < entropy_threshold else 0
+
+    # Pearson correlation
+    try:
+        correlation_coefficient, _ = pearsonr(gray3.flatten(), gray4.flatten())
+    except Exception:
+        correlation_coefficient = np.nan
+
+    # Jaccard Index
+    jaccard_intersection = np.sum(np.minimum(gray3, gray4))
+    jaccard_union = np.sum(np.maximum(gray3, gray4))
+
+    if jaccard_union == 0:
+        jaccard_index = np.nan
+    else:
+        jaccard_index = jaccard_intersection / jaccard_union
+
+    # MSLE
+    msle = np.mean((np.log1p(gray3_float) - np.log1p(gray4_float)) ** 2)
+
+    # KL Divergence
+    epsilon = 1e-9
+    kl_divergence = np.sum(
+        gray3_float * np.log((gray3_float + epsilon) / (gray4_float + epsilon))
+    )
+
+    # Cosine Similarity
+    dot_product = np.dot(gray3.flatten(), gray4.flatten())
+    norm_gray3 = np.linalg.norm(gray3.flatten())
+    norm_gray4 = np.linalg.norm(gray4.flatten())
+
+    if norm_gray3 == 0 or norm_gray4 == 0:
+        cosine_similarity = np.nan
+    else:
+        cosine_similarity = dot_product / (norm_gray3 * norm_gray4)
+
+    # Histogram Correlation
+    hist3, _ = np.histogram(gray3.flatten(), bins=256, range=[0, 256])
+    hist4, _ = np.histogram(gray4.flatten(), bins=256, range=[0, 256])
+
+    try:
+        hist_correlation = np.corrcoef(hist3, hist4)[0, 1]
+    except Exception:
+        hist_correlation = np.nan
+
+    # Perceptual Hash
+    try:
+        hash3 = phash(Image.fromarray(gray3))
+        hash4 = phash(Image.fromarray(gray4))
+        hamming_distance = hash3 - hash4
+    except Exception:
+        hamming_distance = np.nan
+
+    # HOG features
+    try:
+        if gray3.shape[0] >= 16 and gray3.shape[1] >= 16:
+            hog_features3, _ = hog(
+                gray3,
+                orientations=8,
+                pixels_per_cell=(8, 8),
+                cells_per_block=(1, 1),
+                visualize=True
+            )
+
+            hog_features4, _ = hog(
+                gray4,
+                orientations=8,
+                pixels_per_cell=(8, 8),
+                cells_per_block=(1, 1),
+                visualize=True
+            )
+
+            hog_distance = cosine(hog_features3.flatten(), hog_features4.flatten())
+
+            hog_features3_only = hog(
+                gray3,
+                orientations=8,
+                pixels_per_cell=(8, 8),
+                cells_per_block=(1, 1),
+                visualize=False
+            )
+
+            hog_features4_only = hog(
+                gray4,
+                orientations=8,
+                pixels_per_cell=(8, 8),
+                cells_per_block=(1, 1),
+                visualize=False
+            )
+
+            hog_similarity = np.corrcoef(
+                hog_features3_only.flatten(),
+                hog_features4_only.flatten()
+            )[0, 1]
+        else:
+            hog_distance = np.nan
+            hog_similarity = np.nan
+
+    except Exception:
+        hog_distance = np.nan
+        hog_similarity = np.nan
+
+    metrics["MSE"] = mse
+    metrics["SSIM"] = ssi
+    metrics["PSNR"] = psnr
+    metrics["MAE"] = mae
+    metrics["Histogram_Intersection"] = hist_intersection
+    metrics["EMD"] = emd
+    metrics["MAPE"] = mape
+    metrics["Entropy_Image_1"] = entropy_image3
+    metrics["Entropy_Image_2"] = entropy_image4
+    metrics["Entropy_Difference"] = entropy_difference
+    metrics["Entropy_Percentage_Difference"] = entropy_percentage_difference
+    metrics["Entropy_Diff_Pass"] = entropy_diff_pass
+    metrics["Correlation_Coefficient"] = correlation_coefficient
+    metrics["Jaccard_Index"] = jaccard_index
+    metrics["MSLE"] = msle
+    metrics["KL_Divergence"] = kl_divergence
+    metrics["Cosine_Similarity"] = cosine_similarity
+    metrics["Histogram_Correlation"] = hist_correlation
+    metrics["Hamming_Distance"] = hamming_distance
+    metrics["HOG_Distance"] = hog_distance
+    metrics["HOG_Similarity"] = hog_similarity
+
+    return metrics
+
+
+def classify_similarity(metrics):
+    """
+    Your 17-metric voting logic.
+    Returns params list and total score.
+    """
+
+    params = []
+
+    mse = metrics["MSE"]
+    ssi = metrics["SSIM"]
+    psnr = metrics["PSNR"]
+    mae = metrics["MAE"]
+    intersection = metrics["Histogram_Intersection"]
+    emd = metrics["EMD"]
+    mape = metrics["MAPE"]
+    entropy_diff_pass = metrics["Entropy_Diff_Pass"]
+    correlation_coefficient = metrics["Correlation_Coefficient"]
+    jaccard_index = metrics["Jaccard_Index"]
+    msle = metrics["MSLE"]
+    kl_divergence = metrics["KL_Divergence"]
+    cosine_similarity = metrics["Cosine_Similarity"]
+    hist_correlation = metrics["Histogram_Correlation"]
+    hamming_distance = metrics["Hamming_Distance"]
+    hog_distance = metrics["HOG_Distance"]
+    hog_similarity = metrics["HOG_Similarity"]
+
+    mse_thresholds = [100, 500]
+    ssi_thresholds = [0.5, 0.8]
+    psnr_thresholds = [20, 30]
+    mae_thresholds = [50, 150]
+    intersection_thresholds = [0.5, 0.9]
+    emd_thresholds = [0.1, 0.01]
+    mape_thresholds = [10, 30]
+    entropy_thresholds = [0, 1]
+    correlation_thresholds = [0.5, 0.9]
+    jaccard_thresholds = [0.5, 0.8]
+    msle_thresholds = [0.1, 0.5]
+    kl_divergence_thresholds = [1000, 5000]
+    cosine_similarity_thresholds = [0.5, 0.8]
+    hist_correlation_thresholds = [0.5, 0.9]
+    hamming_distance_thresholds = [5, 10]
+    hog_distance_thresholds = [0.1, 0.5]
+    hog_similarity_thresholds = [0.3, 0.7]
+
+    # 1. MSE
+    if mse < mse_thresholds[0]:
+        params.append(1)
+    elif mse < mse_thresholds[1]:
+        params.append(0)
+    else:
+        params.append(-1)
+
+    # 2. SSIM
+    if np.isnan(ssi):
+        params.append(0)
+    elif ssi > ssi_thresholds[1]:
+        params.append(1)
+    elif ssi < ssi_thresholds[0]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 3. PSNR
+    if psnr > psnr_thresholds[1]:
+        params.append(1)
+    elif psnr < psnr_thresholds[0]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 4. MAE
+    if mae < mae_thresholds[0]:
+        params.append(1)
+    elif mae > mae_thresholds[1]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 5. Histogram Intersection
+    if intersection > intersection_thresholds[1]:
+        params.append(1)
+    elif intersection < intersection_thresholds[0]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 6. EMD
+    if emd < emd_thresholds[1]:
+        params.append(1)
+    elif emd > emd_thresholds[0]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 7. MAPE
+    if mape < mape_thresholds[0]:
+        params.append(1)
+    elif mape > mape_thresholds[1]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 8. Entropy
+    if entropy_diff_pass == entropy_thresholds[1]:
+        params.append(1)
+    else:
+        params.append(0)
+
+    # 9. Correlation Coefficient
+    if np.isnan(correlation_coefficient):
+        params.append(0)
+    elif correlation_coefficient > correlation_thresholds[1]:
+        params.append(1)
+    elif correlation_coefficient < correlation_thresholds[0]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 10. Jaccard Index
+    if np.isnan(jaccard_index):
+        params.append(0)
+    elif jaccard_index > jaccard_thresholds[1]:
+        params.append(1)
+    elif jaccard_index < jaccard_thresholds[0]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 11. MSLE
+    if msle < msle_thresholds[0]:
+        params.append(1)
+    elif msle > msle_thresholds[1]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 12. KL Divergence
+    if kl_divergence < kl_divergence_thresholds[0]:
+        params.append(1)
+    elif kl_divergence > kl_divergence_thresholds[1]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 13. Cosine Similarity
+    if np.isnan(cosine_similarity):
+        params.append(0)
+    elif cosine_similarity > cosine_similarity_thresholds[1]:
+        params.append(1)
+    elif cosine_similarity < cosine_similarity_thresholds[0]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 14. Histogram Correlation
+    if np.isnan(hist_correlation):
+        params.append(0)
+    elif hist_correlation > hist_correlation_thresholds[1]:
+        params.append(1)
+    elif hist_correlation < hist_correlation_thresholds[0]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 15. Hamming Distance
+    if np.isnan(hamming_distance):
+        params.append(0)
+    elif hamming_distance < hamming_distance_thresholds[0]:
+        params.append(1)
+    elif hamming_distance > hamming_distance_thresholds[1]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 16. HOG Distance
+    if np.isnan(hog_distance):
+        params.append(0)
+    elif hog_distance < hog_distance_thresholds[0]:
+        params.append(1)
+    elif hog_distance > hog_distance_thresholds[1]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    # 17. HOG Similarity
+    if np.isnan(hog_similarity):
+        params.append(0)
+    elif hog_similarity > hog_similarity_thresholds[1]:
+        params.append(1)
+    elif hog_similarity < hog_similarity_thresholds[0]:
+        params.append(-1)
+    else:
+        params.append(0)
+
+    similarity_score = sum(params)
+
+    return params, similarity_score
+
+
+#================================================================
+# LOAD IMAGES
+#================================================================
+
+image1 = cv2.imread(image1_path)
+image2 = cv2.imread(image2_path)
+
+if image1 is None or image2 is None:
+    print("Error: One or both images could not be loaded.")
+    exit()
+
+if image1.shape != image2.shape:
+    print("Warning: Image shapes are different.")
+    print("Image 1 shape:", image1.shape)
+    print("Image 2 shape:", image2.shape)
+    print("Resizing image2 to match image1.")
+
+    image2 = cv2.resize(image2, (image1.shape[1], image1.shape[0]))
+
+
+#================================================================
+# DIFFERENCE DETECTION
+#================================================================
+
+gray1 = cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY)
+gray2 = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
+
+diff = cv2.absdiff(gray1, gray2)
+
+_, thresh = cv2.threshold(diff, diff_threshold, 255, cv2.THRESH_BINARY)
+
+# Clean noise and merge nearby different pixels
+kernel = cv2.getStructuringElement(
+    cv2.MORPH_RECT,
+    (merge_kernel_size, merge_kernel_size)
+)
+
+thresh_clean = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+thresh_clean = cv2.dilate(thresh_clean, kernel, iterations=1)
+
+# Find contours for multiple changed regions
+contours, _ = cv2.findContours(
+    thresh_clean,
+    cv2.RETR_EXTERNAL,
+    cv2.CHAIN_APPROX_SIMPLE
+)
+
+bounding_boxes = []
+
+for contour in contours:
+    x, y, w, h = cv2.boundingRect(contour)
+    area = w * h
+
+    if area >= min_area:
+        x = x - box_padding
+        y = y - box_padding
+        w = w + 2 * box_padding
+        h = h + 2 * box_padding
+
+        _, x1, y1, x2, y2 = safe_crop(image1, x, y, w, h)
+
+        bounding_boxes.append((x1, y1, x2, y2))
+
+# Sort boxes from top-to-bottom, then left-to-right
+bounding_boxes = sorted(bounding_boxes, key=lambda b: (b[1], b[0]))
+
+
+#================================================================
+# DRAW MULTIPLE BOUNDING BOXES
+#================================================================
+
+result_image1 = image1.copy()
+result_image2 = image2.copy()
+
+for idx, (x1, y1, x2, y2) in enumerate(bounding_boxes, start=1):
+    cv2.rectangle(result_image1, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    cv2.rectangle(result_image2, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    label = f"Region {idx}"
+    cv2.putText(
+        result_image1,
+        label,
+        (x1, max(20, y1 - 10)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 0),
+        2,
+        cv2.LINE_AA
+    )
+
+    cv2.putText(
+        result_image2,
+        label,
+        (x1, max(20, y1 - 10)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 0),
+        2,
+        cv2.LINE_AA
+    )
+
+shape_text = f"Height: {image2.shape[0]} px, Width: {image2.shape[1]} px, Channels: {image2.shape[2]}"
+cv2.putText(
+    result_image2,
+    shape_text,
+    (10, 30),
+    cv2.FONT_HERSHEY_SIMPLEX,
+    0.8,
+    (0, 255, 0),
+    2,
+    cv2.LINE_AA
+)
+
+
+#================================================================
+# SAVE AND DISPLAY MULTIPLE BOX RESULT
+#================================================================
+
+cv2.imwrite(os.path.join(output_dir, 'result_image1_multiple_boxes.png'), result_image1)
+cv2.imwrite(os.path.join(output_dir, 'result_image2_multiple_boxes.png'), result_image2)
+cv2.imwrite(os.path.join(output_dir, 'difference_mask.png'), diff)
+cv2.imwrite(os.path.join(output_dir, 'threshold_mask.png'), thresh)
+cv2.imwrite(os.path.join(output_dir, 'threshold_mask_cleaned.png'), thresh_clean)
+
+result_rgb1 = cv2.cvtColor(result_image1, cv2.COLOR_BGR2RGB)
+result_rgb2 = cv2.cvtColor(result_image2, cv2.COLOR_BGR2RGB)
+
+plt.figure(figsize=(14, 6))
+
+plt.subplot(1, 2, 1)
+plt.imshow(result_rgb1)
+plt.title('Image 1 with Multiple Bounding Boxes')
+plt.axis('off')
+
+plt.subplot(1, 2, 2)
+plt.imshow(result_rgb2)
+plt.title('Image 2 with Multiple Bounding Boxes')
+plt.axis('off')
+
+plt.tight_layout()
+plt.show()
+
+print("====================================================")
+print("TOTAL DETECTED REGIONS:", len(bounding_boxes))
+print("Image shape H, W, C:", image1.shape)
+print("====================================================")
+
+for idx, (x1, y1, x2, y2) in enumerate(bounding_boxes, start=1):
+    print(f"Region {idx}")
+    print("Location of bounding box      (x, y):", (x1, y1))
+    print("Size of bounding box (width, height):", (x2 - x1, y2 - y1))
+    print("----------------------------------------------------")
+
+
+#================================================================
+# CHECK EACH DETECTED PORTION: BLUR + CROSS-CHECK METRICS
+#================================================================
+
+all_results = []
+
+for idx, (x1, y1, x2, y2) in enumerate(bounding_boxes, start=1):
+
+    image3 = image1[y1:y2, x1:x2]
+    image4 = image2[y1:y2, x1:x2]
+
+    region_dir = os.path.join(output_dir, f"region_{idx}")
+    os.makedirs(region_dir, exist_ok=True)
+
+    cv2.imwrite(os.path.join(region_dir, f'region_{idx}_image1_crop.png'), image3)
+    cv2.imwrite(os.path.join(region_dir, f'region_{idx}_image2_crop.png'), image4)
+
+    cropped_box_image = image1.copy()
+    cv2.rectangle(cropped_box_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    cropped_box_image = cropped_box_image[y1:y2, x1:x2]
+
+    cv2.imwrite(os.path.join(region_dir, f'region_{idx}_boxed_crop.png'), cropped_box_image)
+
+    lap_var_1, lap_var_2, blur_percentage = calculate_blur_percentage(image3, image4)
+
+    metrics = calculate_crosscheck_metrics(image3, image4)
+
+    if metrics is not None:
+        params, similarity_score = classify_similarity(metrics)
+    else:
+        params = []
+        similarity_score = np.nan
+
+    if blur_percentage <= blur_sure_threshold:
+        blur_decision = "THE REGION IS BLURRED FOR SURE"
+    else:
+        blur_decision = "MAYBE NOT BLURRED / NOT STRONGLY PROCESSED"
+
+    result_row = {
+        "Region": idx,
+        "x": x1,
+        "y": y1,
+        "width": x2 - x1,
+        "height": y2 - y1,
+        "Laplacian_Variance_Image1": lap_var_1,
+        "Laplacian_Variance_Image2": lap_var_2,
+        "Blur_Percentage_Image2_vs_Image1": blur_percentage,
+        "Blur_Decision": blur_decision,
+        "Similarity_Vote_Params": params,
+        "Similarity_Total_Score": similarity_score
+    }
+
+    if metrics is not None:
+        result_row.update(metrics)
+
+    all_results.append(result_row)
+
+    print("\n====================================================")
+    print(f"REGION {idx}")
+    print("====================================================")
+    print("Location of bounding box      (x, y):", (x1, y1))
+    print("Size of bounding box (width, height):", (x2 - x1, y2 - y1))
+    print("Laplacian Variance of Image 1:", lap_var_1)
+    print("Laplacian Variance of Image 2:", lap_var_2)
+    print("The variance of blur is:", blur_percentage, "% of original image.")
+    print("Blur Decision:", blur_decision)
+    print("Similarity Vote Params:", params)
+    print("Similarity Total Score:", similarity_score)
+
+    if metrics is not None:
+        print("Mean Squared Error (MSE) between the two images, [0, inf):", metrics["MSE"])
+        print("Structural Similarity Index (SSIM) between the two images, [-1, 1]:", metrics["SSIM"])
+        print("Peak Signal-to-Noise Ratio (PSNR) between the two images, [0, inf):", metrics["PSNR"])
+        print("Mean Absolute Error (MAE) between the two images, [0, inf):", metrics["MAE"])
+        print("Histogram Intersection between the two images, [0, 1]:", metrics["Histogram_Intersection"])
+        print("Earth Mover's Distance (EMD) between the two images, [0, inf):", metrics["EMD"])
+        print("Mean Absolute Percentage Error (MAPE) between the two images, [0, inf):", metrics["MAPE"])
+        print("Entropy Difference:", metrics["Entropy_Difference"])
+        print("Entropy Percentage Difference:", metrics["Entropy_Percentage_Difference"])
+        print("Correlation Coefficient between the two images, [-1, 1]:", metrics["Correlation_Coefficient"])
+        print("Jaccard Index between the two images, [0, 1]:", metrics["Jaccard_Index"])
+        print("Mean Squared Logarithmic Error (MSLE) between the two images, [0, inf):", metrics["MSLE"])
+        print("Kullback-Leibler Divergence (KL Divergence) between the two images, [0, inf):", metrics["KL_Divergence"])
+        print("Cosine Similarity between the two images, [-1, 1]:", metrics["Cosine_Similarity"])
+        print("Histogram Correlation between the two images, [-1, 1]:", metrics["Histogram_Correlation"])
+        print("Hamming Distance between the perceptual hashes, [0, 64]:", metrics["Hamming_Distance"])
+        print("Cosine Distance between HOG features, [0, inf):", metrics["HOG_Distance"])
+        print("Correlation Coefficient between HOG features, [-1, 1]:", metrics["HOG_Similarity"])
+
+    # Display crop comparison
+    plt.figure(figsize=(12, 4))
+
+    plt.subplot(1, 3, 1)
+    plt.imshow(cv2.cvtColor(image3, cv2.COLOR_BGR2RGB))
+    plt.title(f'Region {idx}: Image 1 Crop')
+    plt.axis('off')
+
+    plt.subplot(1, 3, 2)
+    plt.imshow(cv2.cvtColor(image4, cv2.COLOR_BGR2RGB))
+    plt.title(f'Region {idx}: Image 2 Crop')
+    plt.axis('off')
+
+    plt.subplot(1, 3, 3)
+    plt.imshow(cv2.cvtColor(cropped_box_image, cv2.COLOR_BGR2RGB))
+    plt.title(f'Region {idx}: Boxed Crop')
+    plt.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+
+#================================================================
+# SAVE SUMMARY CSV
+#================================================================
+
+if len(all_results) > 0:
+    df_results = pd.DataFrame(all_results)
+
+    csv_path = os.path.join(output_dir, 'multiple_region_blur_detection_summary.csv')
+    df_results.to_csv(csv_path, index=False, encoding='utf-8-sig')
+
+    print("\n====================================================")
+    print("SUMMARY SAVED TO:")
+    print(csv_path)
+    print("====================================================")
+
+    print("\nSUMMARY TABLE:")
+    print(df_results[
+        [
+            "Region",
+            "x",
+            "y",
+            "width",
+            "height",
+            "Blur_Percentage_Image2_vs_Image1",
+            "Blur_Decision",
+            "Similarity_Total_Score"
+        ]
+    ])
+
+else:
+    print("\nNo different / processed / blurred region detected.")
+
+
+#####======================================================================
+#### SECOND CELL
+#####======================================================================
+#================================================================
+# Calculate the parameters percentage decision for each detected region
+#================================================================
+
+def calculate_parameter_decision(params, similar_threshold=0.5, dissimilar_threshold=-0.5):
+    """
+    params contains values like:
+        1  = similar / same
+        0  = unsure / neutral
+       -1  = dissimilar / different
+
+    number_param range:
+       +1.0 = all metrics say similar
+        0.0 = mixed / unsure
+       -1.0 = all metrics say dissimilar
+    """
+
+    if params is None or len(params) == 0:
+        return {
+            "number_param": 0,
+            "decision": "CAN'T BE DETECTED",
+            "message": "No parameter votes found."
+        }
+
+    abs_params = [abs(value) for value in params]
+    denominator = sum(abs_params)
+
+    if denominator == 0:
+        return {
+            "number_param": 0,
+            "decision": "CAN'T BE DETECTED",
+            "message": "All parameter votes are neutral / zero."
+        }
+
+    number_param = sum(params) / denominator
+
+    if number_param >= similar_threshold:
+        decision = "SIMILAR / SAME IMAGE"
+        message = "It's the same image that is processed."
+
+    elif number_param <= dissimilar_threshold:
+        decision = "DISSIMILAR / NOT SAME IMAGE"
+        message = "It's NOT the same image that is processed."
+
+    else:
+        decision = "CAN'T BE DETECTED CLEARLY"
+        message = "Not sure if it is the same processed image."
+
+    return {
+        "number_param": number_param,
+        "decision": decision,
+        "message": message
+    }
+
+
+#================================================================
+# CASE 1: If multiple regions were detected using previous code
+#================================================================
+
+if "all_results" in globals() and len(all_results) > 0:
+
+    print("====================================================")
+    print("PARAMETER PERCENTAGE DECISION FOR MULTIPLE REGIONS")
+    print("====================================================")
+
+    for row in all_results:
+        region_id = row.get("Region", "Unknown")
+        region_params = row.get("Similarity_Vote_Params", [])
+
+        decision_result = calculate_parameter_decision(region_params)
+
+        row["Parameter_Decision_Score"] = decision_result["number_param"]
+        row["Parameter_Decision"] = decision_result["decision"]
+        row["Parameter_Decision_Message"] = decision_result["message"]
+
+        print(f"\nRegion {region_id}")
+        print("----------------------------------")
+        print("Params:", region_params)
+        print("Parameter decision score:", decision_result["number_param"])
+        print("Decision:", decision_result["decision"])
+        print("Message:", decision_result["message"])
+
+    # Optional summary dataframe
+    df_decision_summary = pd.DataFrame(all_results)
+
+    display_columns = [
+        "Region",
+        "x",
+        "y",
+        "width",
+        "height",
+        "Blur_Percentage_Image2_vs_Image1",
+        "Blur_Decision",
+        "Similarity_Total_Score",
+        "Parameter_Decision_Score",
+        "Parameter_Decision",
+        "Parameter_Decision_Message"
+    ]
+
+    existing_columns = [col for col in display_columns if col in df_decision_summary.columns]
+
+    print("\n====================================================")
+    print("FINAL DECISION SUMMARY")
+    print("====================================================")
+    print(df_decision_summary[existing_columns])
+
+    # Optional: save updated summary CSV
+    try:
+        final_csv_path = os.path.join(output_dir, "final_multiple_region_decision_summary.csv")
+        df_decision_summary.to_csv(final_csv_path, index=False, encoding="utf-8-sig")
+        print("\nFinal decision summary saved to:")
+        print(final_csv_path)
+    except Exception as e:
+        print("\nCould not save final CSV.")
+        print("Reason:", e)
+
+
+#================================================================
+# CASE 2: If only one params list exists
+#================================================================
+
+elif "params" in globals():
+
+    print("====================================================")
+    print("PARAMETER PERCENTAGE DECISION FOR SINGLE REGION")
+    print("====================================================")
+
+    decision_result = calculate_parameter_decision(params)
+
+    number_param = decision_result["number_param"]
+
+    print("Params:", params)
+    print("Parameter decision score:", number_param)
+    print("Decision:", decision_result["decision"])
+    print("Message:", decision_result["message"])
+
+
+#================================================================
+# CASE 3: If neither all_results nor params exists
+#================================================================
+
+else:
+    print("No params or all_results found.")
+    print("Please run the blur/difference detection code first.")
+
+
+#####======================================================================
+#### THIRD CELL
+#####======================================================================
+#================================================================
+# Calculate the parameters mode: DECISION
+#================================================================
+
+from collections import Counter
+import pandas as pd
+
+
+def calculate_mode_decision(params):
+    """
+    params contains:
+        1  = similar / same
+        0  = uncertain / neutral
+       -1  = dissimilar / different
+
+    This function avoids unsafe mode decisions when there is a tie.
+    """
+
+    if params is None or len(params) == 0:
+        return {
+            "mode_value": None,
+            "decision": "CAN'T BE DETECTED",
+            "message": "No parameter votes found.",
+            "counts": {}
+        }
+
+    counts = Counter(params)
+
+    similar_count = counts.get(1, 0)
+    neutral_count = counts.get(0, 0)
+    dissimilar_count = counts.get(-1, 0)
+
+    max_count = max(similar_count, neutral_count, dissimilar_count)
+
+    modes = []
+
+    if similar_count == max_count:
+        modes.append(1)
+
+    if neutral_count == max_count:
+        modes.append(0)
+
+    if dissimilar_count == max_count:
+        modes.append(-1)
+
+    # Clear single mode
+    if len(modes) == 1:
+        mode_value = modes[0]
+
+        if mode_value == 1:
+            decision = "SIMILAR / SAME IMAGE"
+            message = "It's the same image that is processed."
+
+        elif mode_value == -1:
+            decision = "DISSIMILAR / NOT SAME IMAGE"
+            message = "It's NOT the same image that is processed."
+
+        else:
+            decision = "CAN'T BE DETECTED CLEARLY"
+            message = "Not sure if it is the same processed image."
+
+    # Tie case
+    else:
+        mode_value = "TIE"
+
+        # Safer rule:
+        # If similar and dissimilar are tied, do not force a decision.
+        decision = "CAN'T BE DETECTED CLEARLY"
+        message = "Mode decision has a tie, so the result is not safe to classify strongly."
+
+    return {
+        "mode_value": mode_value,
+        "decision": decision,
+        "message": message,
+        "counts": {
+            "similar_1": similar_count,
+            "neutral_0": neutral_count,
+            "dissimilar_minus_1": dissimilar_count
+        }
+    }
+
+
+#================================================================
+# CASE 1: Multiple detected regions
+#================================================================
+
+if "all_results" in globals() and len(all_results) > 0:
+
+    print("====================================================")
+    print("MODE DECISION FOR MULTIPLE REGIONS")
+    print("====================================================")
+
+    for row in all_results:
+        region_id = row.get("Region", "Unknown")
+        region_params = row.get("Similarity_Vote_Params", [])
+
+        mode_result = calculate_mode_decision(region_params)
+
+        row["Mode_Value"] = mode_result["mode_value"]
+        row["Mode_Decision"] = mode_result["decision"]
+        row["Mode_Decision_Message"] = mode_result["message"]
+        row["Mode_Counts"] = mode_result["counts"]
+
+        print(f"\nRegion {region_id}")
+        print("----------------------------------")
+        print("Params:", region_params)
+        print("Counts:", mode_result["counts"])
+        print("Mode value:", mode_result["mode_value"])
+        print("Decision:", mode_result["decision"])
+        print("Message:", mode_result["message"])
+
+    df_mode_summary = pd.DataFrame(all_results)
+
+    display_columns = [
+        "Region",
+        "x",
+        "y",
+        "width",
+        "height",
+        "Blur_Percentage_Image2_vs_Image1",
+        "Blur_Decision",
+        "Similarity_Total_Score",
+        "Parameter_Decision_Score",
+        "Parameter_Decision",
+        "Mode_Value",
+        "Mode_Decision",
+        "Mode_Decision_Message"
+    ]
+
+    existing_columns = [
+        col for col in display_columns
+        if col in df_mode_summary.columns
+    ]
+
+    print("\n====================================================")
+    print("FINAL MODE DECISION SUMMARY")
+    print("====================================================")
+    print(df_mode_summary[existing_columns])
+
+    # Optional: save updated summary CSV
+    try:
+        final_mode_csv_path = os.path.join(
+            output_dir,
+            "final_multiple_region_mode_decision_summary.csv"
+        )
+
+        df_mode_summary.to_csv(
+            final_mode_csv_path,
+            index=False,
+            encoding="utf-8-sig"
+        )
+
+        print("\nFinal mode decision summary saved to:")
+        print(final_mode_csv_path)
+
+    except Exception as e:
+        print("\nCould not save final mode decision CSV.")
+        print("Reason:", e)
+
+
+#================================================================
+# CASE 2: Single params list
+#================================================================
+
+elif "params" in globals():
+
+    print("====================================================")
+    print("MODE DECISION FOR SINGLE REGION")
+    print("====================================================")
+
+    mode_result = calculate_mode_decision(params)
+
+    mode_value = mode_result["mode_value"]
+
+    print("Params:", params)
+    print("Counts:", mode_result["counts"])
+    print("Mode value:", mode_value)
+    print("Decision:", mode_result["decision"])
+    print("Message:", mode_result["message"])
+
+
+#================================================================
+# CASE 3: No params found
+#================================================================
+
+else:
+    print("No params or all_results found.")
+    print("Please run the blur/difference detection code first.")
