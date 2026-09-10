@@ -69,6 +69,7 @@ nav:
       - Use it in CI: ci.md
       - GitHub Action: github_action.md
       - Use cases: use_cases.md
+      - Benchmark: benchmarks.md
   - Reference:
       - Command line: cli.md
       - Python API: python_api.md

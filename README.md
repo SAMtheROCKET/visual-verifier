@@ -273,6 +273,32 @@ exported from the top level: `verify_image`, `verify_video`,
 `VerificationStatus`, and the structured error hierarchy rooted at
 `VisualVerifierError`.
 
+## How it compares
+
+Averaging the difference between two frames is the check most teams
+reach for first. The
+[Anonymization Gap Benchmark](docs/benchmarks.md) measures what that
+costs, over 78 generated sequences carrying 13 labelled failure modes:
+
+| Method | Missed-frame recall | False alarms | Localizes region | Needs tuning |
+| --- | ---: | ---: | :-: | :-: |
+| **Visual Verifier** | **79%** | **0.0%** | Yes | No |
+| Mean pixel difference | 42% | 0.0% | No | Yes |
+| PSNR threshold | 42% | 0.0% | No | Yes |
+| SSIM threshold | 42% | 0.0% | No | Yes |
+
+The global metrics are handed a held-out calibration set to pick their
+best threshold. Visual Verifier runs at shipped defaults. They still
+drop to **0% recall** on compressed, noisy, and offset-blur footage,
+because a metric that averages the whole frame cannot separate a missing
+blur from a re-encode. Region-by-region measurement can.
+
+The benchmark also publishes the three families Visual Verifier itself
+scores 0% on — weak blur, partially covered targets, and a missed plate
+among several. All three are the same gap: *something* was processed,
+but not the thing that mattered. That is what
+[V5.3 target-aware verification](docs/target_annotation.md) is for.
+
 ## Verification contract
 
 ```text
@@ -381,6 +407,7 @@ certificate and not a guarantee of anonymization. Read
 | [`docs/architecture.md`](docs/architecture.md) | Module boundaries and dependency direction |
 | [`docs/temporal_tracking.md`](docs/temporal_tracking.md) | Association, lifecycle, lineage, and metrics |
 | [`docs/github_action.md`](docs/github_action.md) | Every action input, output, and permission |
+| [`docs/benchmarks.md`](docs/benchmarks.md) | Measured comparison against global-metric baselines |
 | [`docs/output_schema.md`](docs/output_schema.md) | Every report field |
 | [`docs/limitations.md`](docs/limitations.md) | Known failure modes and honest scope |
 | [`docs/use_cases.md`](docs/use_cases.md) | Suitable uses and unsupportable claims |
@@ -428,6 +455,7 @@ tests/                         Unit and end-to-end regressions
 examples/media/                Reproducible 15-frame fixtures
 examples/expected/             Executable demo contract
 docs/                          Architecture and behavior documentation
+benchmarks/                    Measured comparison against simpler methods
 scripts/                       Bootstrap, quality, cleanup, and release gates
 action.yml                     Composite GitHub Action wrapping the CLI
 archive/legacy_cells/          Read-only historical prototypes

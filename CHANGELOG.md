@@ -56,6 +56,14 @@ stays `Pre-Alpha`: report schemas may still change before V6.0.
   shell that no unit test can reach
 - A `GitHub Action` documentation page listing every input, output, and
   required permission
+- The Anonymization Gap Benchmark under `benchmarks/`, measuring
+  Visual Verifier against mean pixel difference, PSNR, and SSIM over 78
+  generated sequences carrying 13 labelled failure modes. The baselines
+  are given a held-out calibration set and an oracle upper bound while
+  Visual Verifier runs untuned, because a benchmark that flatters the
+  tool publishing it is worthless. Published results are in
+  `docs/benchmarks.md`; `tests/test_benchmark_harness.py` covers the
+  scoring and split logic so a wrong number fails the normal test run
 - A documentation site built with MkDocs Material and published to
   GitHub Pages, with new Getting started, Anonymization QA, CI,
   Command line, and Python API pages that previously existed only as
@@ -113,6 +121,11 @@ stays `Pre-Alpha`: report schemas may still change before V6.0.
 - Positioning leads with anonymization QA, the use case people search
   for, while stating that the engine verifies any pixel-level change
 - Trove classifier advanced from `2 - Pre-Alpha` to `3 - Alpha`
+- Documented that the default `--min-severity` of `8.0` accepts a blur
+  too weak to anonymize, and that `--min-severity 50` rejects it with no
+  new false alarms on the benchmark. The permissive default is kept
+  because a high severity floor rejects legitimate processing on real
+  footage
 - The README headline says *verify* rather than *prove*. `PASS` reports
   that accepted visual change was detected under the configured
   thresholds; proving that a required semantic target was transformed
