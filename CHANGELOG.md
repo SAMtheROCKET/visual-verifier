@@ -128,6 +128,15 @@ from 79% to 100% recall with no false alarms.
   PyPI resolves neither form. `tests/test_readme_assets.py` checks that
   every linked file exists, that no absolute URL creeps back in, and
   that the release workflow converts before it builds
+- The bug-report and question templates asked reporters for their
+  version while suggesting `0.2.0`, and `SECURITY.md` described the
+  project as `pre-alpha` and listed `0.2.0` as supported. The classifier
+  has been `Alpha` since 0.2.0, and `0.2.0` was never released. A guard
+  now fails when any community file advertises a version other than the
+  package's own
+- The bug-report template's environment example was a maintainer's own
+  `doctor` output, naming a specific Windows build number. It is now a
+  neutral example, and a guard rejects build numbers in templates
 - A determinism test replaced the bare words `first` and `second`
   anywhere in the report, so a repository path containing either word
   made a correct implementation look nondeterministic. It now

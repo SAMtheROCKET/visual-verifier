@@ -39,4 +39,4 @@ body:
     id: version
     attributes:
       label: Visual Verifier version
-      placeholder: "0.2.0"
+      placeholder: "0.3.0"

@@ -8,6 +8,7 @@ broken, so its behaviour is exercised here instead.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -100,3 +101,62 @@ def test_citation_version_is_actually_read() -> None:
     assert GUARD_MODULE._read_citation_version() == (
         visual_verifier.__version__
     )
+
+
+VERSION_ADVERTISING_PATHS_TUPLE = (
+    Path(".github") / "ISSUE_TEMPLATE" / "bug_report.yml",
+    Path(".github") / "DISCUSSION_TEMPLATE" / "q-a.yml",
+    Path("SECURITY.md"),
+)
+STALE_VERSION_PATTERN = re.compile(r"`?(\d+\.\d+\.\d+)(?![a-z0-9.])`?")
+
+
+@pytest.mark.parametrize(
+    "relative_path_obj",
+    VERSION_ADVERTISING_PATHS_TUPLE,
+    ids=lambda path_obj: path_obj.name,
+)
+def test_advertised_versions_match_the_package(
+    relative_path_obj: Path,
+) -> None:
+    """Confirm no community file advertises a superseded version.
+
+    A bug template asking for the version and suggesting a release two
+    behind teaches every reporter to file stale information, and a
+    security policy naming an unsupported version is worse than silent.
+    Release versions with a suffix, such as ``0.2.0a0``, are historical
+    entries and are left alone.
+    """
+
+    file_text = (REPOSITORY_ROOT_PATH / relative_path_obj).read_text(
+        encoding="utf-8"
+    )
+    advertised_frozenset = frozenset(STALE_VERSION_PATTERN.findall(file_text))
+    unexpected_list = sorted(
+        advertised_frozenset - {visual_verifier.__version__}
+    )
+
+    assert not unexpected_list, (
+        f"{relative_path_obj.as_posix()} advertises "
+        f"{unexpected_list}, but the package is "
+        f"{visual_verifier.__version__}"
+    )
+
+
+def test_no_maintainer_machine_is_named_in_a_template() -> None:
+    """Confirm no template example identifies a specific machine.
+
+    An OS build number copied from a maintainer's own `doctor` output
+    is both needlessly identifying and misleading as an example.
+    """
+
+    template_directory_path = REPOSITORY_ROOT_PATH / ".github"
+    build_number_pattern = re.compile(r"10\.0\.\d{5}")
+
+    offending_list = [
+        path_obj.relative_to(REPOSITORY_ROOT_PATH).as_posix()
+        for path_obj in template_directory_path.rglob("*.yml")
+        if build_number_pattern.search(path_obj.read_text(encoding="utf-8"))
+    ]
+
+    assert not offending_list, offending_list
