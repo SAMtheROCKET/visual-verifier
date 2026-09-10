@@ -67,6 +67,7 @@ def _sequence(
         frame_count_int=10,
         seed_int=seed_int,
         is_calibration_family_bool=is_calibration_bool,
+        targets_path=Path("targets.csv"),
     )
 
 

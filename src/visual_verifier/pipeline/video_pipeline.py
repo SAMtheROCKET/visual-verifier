@@ -7,6 +7,10 @@ from pathlib import Path
 
 import cv2
 
+from visual_verifier.config.targets import (
+    DEFAULT_TARGET_CONFIG,
+    TargetConfig,
+)
 from visual_verifier.config.tracking import (
     DEFAULT_TRACKING_CONFIG,
     TrackingConfig,
@@ -38,6 +42,17 @@ from visual_verifier.reporting.html_report import (
 )
 from visual_verifier.reporting.json_report import write_json_report
 from visual_verifier.reporting.track_report import write_tracking_reports
+from visual_verifier.targets.coverage import (
+    group_targets_by_frame,
+    measure_frame_targets,
+    summarize_targets,
+)
+from visual_verifier.targets.interpolation import interpolate_targets
+from visual_verifier.targets.models import (
+    Target,
+    TargetCoverage,
+    TargetSummary,
+)
 from visual_verifier.tracking.analysis import analyze_tracks
 from visual_verifier.tracking.models import (
     FrameTrackingResult,
@@ -50,11 +65,14 @@ from visual_verifier.type_aliases import ImageArray, PathInput, ReportRow
 
 FALLBACK_VIDEO_FPS_FLOAT = 30.0
 GENERIC_VIDEO_POLICY_NAME_STR = "generic_change_every_frame"
+TARGET_VIDEO_POLICY_NAME_STR = "target_coverage_every_frame"
 UNPROCESSED_FRAMES_FAILURE_CODE_STR = "UNPROCESSED_FRAMES"
+UNCOVERED_TARGETS_FAILURE_CODE_STR = "UNCOVERED_TARGETS"
 ANNOTATED_VIDEO_FILENAME_STR = "annotated_video.mp4"
 FRAME_REPORT_FILENAME_STR = "frame_report.csv"
 REGION_REPORT_FILENAME_STR = "region_report.csv"
 REJECTED_REGION_REPORT_FILENAME_STR = "rejected_region_report.csv"
+TARGET_REPORT_FILENAME_STR = "target_report.csv"
 SUMMARY_REPORT_FILENAME_STR = "summary.json"
 MAX_CAPTURED_THUMBNAILS_INT = 24
 
@@ -88,6 +106,9 @@ class _VideoRunBuffers:
     failed_frame_thumbnails_list: list[FrameThumbnail] = field(
         default_factory=list
     )
+    target_coverages_list: list[TargetCoverage] = field(default_factory=list)
+    target_failed_frames_list: list[int] = field(default_factory=list)
+    target_summaries_tuple: tuple[TargetSummary, ...] = ()
 
     def record(
         self,
@@ -114,6 +135,31 @@ class _VideoRunBuffers:
             self.failed_frames_list.append(frame_result_obj.frame_number)
         if tracking_result_obj is not None:
             self.tracking_results_list.append(tracking_result_obj)
+
+    def record_targets(
+        self,
+        frame_number_int: int,
+        coverages_tuple: tuple[TargetCoverage, ...],
+    ) -> None:
+        """Record target coverage measured for one frame.
+
+        Args:
+            frame_number_int: One-based frame number.
+            coverages_tuple: Coverage of every target in that frame.
+        """
+
+        if not coverages_tuple:
+            return
+        self.target_coverages_list.extend(coverages_tuple)
+        if any(coverage_obj.is_failure for coverage_obj in coverages_tuple):
+            self.target_failed_frames_list.append(frame_number_int)
+
+    def finalize_targets(self) -> None:
+        """Summarize target coverage once every frame has been read."""
+
+        self.target_summaries_tuple = summarize_targets(
+            self.target_coverages_list
+        )
 
     def capture_failed_frame(
         self,
@@ -194,6 +240,8 @@ class VideoVerificationPipeline:
         detection_config_obj: DetectionConfig,
         enable_tracking_bool: bool,
         tracking_config_obj: TrackingConfig,
+        targets_tuple: tuple[Target, ...] = (),
+        target_config_obj: TargetConfig = DEFAULT_TARGET_CONFIG,
     ) -> None:
         """Initialize the video-verification pipeline."""
 
@@ -205,6 +253,13 @@ class VideoVerificationPipeline:
         self._detection_config_obj = detection_config_obj
         self._enable_tracking_bool = enable_tracking_bool
         self._tracking_config_obj = tracking_config_obj
+        self._target_config_obj = target_config_obj
+        self._targets_tuple = _prepare_targets(
+            targets_tuple, target_config_obj
+        )
+        self._targets_by_frame_dict = group_targets_by_frame(
+            self._targets_tuple
+        )
 
     def run(
         self,
@@ -234,11 +289,14 @@ class VideoVerificationPipeline:
         if tracker_obj is not None:
             tracker_obj.finish(last_frame_number_int)
             run_buffers_obj.finalize_tracking(tracker_obj)
+        run_buffers_obj.finalize_targets()
         result_obj = _build_result_from_context(
             run_context_obj,
             run_buffers_obj,
             self._enable_tracking_bool,
             self._tracking_config_obj,
+            bool(self._targets_tuple),
+            self._target_config_obj,
         )
         return _write_optional_evidence(
             result_obj,
@@ -317,7 +375,7 @@ class VideoVerificationPipeline:
                 reference_frame_ndarray,
                 candidate_ndarray,
             )
-            frame_result_obj = self._evaluate_frame(
+            frame_result_obj, coverages_tuple = self._evaluate_frame(
                 frame_number_int,
                 run_context_obj.reference_metadata_obj,
                 reference_frame_ndarray,
@@ -327,10 +385,8 @@ class VideoVerificationPipeline:
                 tracker_obj,
                 frame_result_obj,
             )
-            run_buffers_obj.record(
-                frame_result_obj,
-                tracking_result_obj,
-            )
+            run_buffers_obj.record(frame_result_obj, tracking_result_obj)
+            run_buffers_obj.record_targets(frame_number_int, coverages_tuple)
             run_buffers_obj.capture_failed_frame(
                 frame_result_obj,
                 reference_frame_ndarray,
@@ -342,6 +398,7 @@ class VideoVerificationPipeline:
                 frame_result_obj,
                 tracking_result_obj,
                 run_context_obj.reference_metadata_obj.frame_count,
+                coverages_tuple,
             )
         return last_frame_number_int
 
@@ -351,15 +408,31 @@ class VideoVerificationPipeline:
         reference_metadata_obj: MediaMetadata,
         reference_frame_ndarray: ImageArray,
         candidate_frame_ndarray: ImageArray,
-    ) -> FrameVerification:
-        """Detect regions and evaluate one synchronized frame."""
+    ) -> tuple[FrameVerification, tuple[TargetCoverage, ...]]:
+        """Detect regions and evaluate one synchronized frame.
+
+        Args:
+            frame_number_int: One-based frame number.
+            reference_metadata_obj: Reference media metadata.
+            reference_frame_ndarray: Original frame.
+            candidate_frame_ndarray: Normalized candidate frame.
+
+        Returns:
+            The frame verification and its target coverage, which is
+            empty when no targets were supplied.
+        """
 
         accepted_regions_tuple, rejected_regions_tuple = detect_regions(
             reference_frame_ndarray,
             candidate_frame_ndarray,
             self._detection_config_obj,
         )
-        return FrameVerification(
+        coverages_tuple = measure_frame_targets(
+            self._targets_by_frame_dict.get(frame_number_int, ()),
+            accepted_regions_tuple,
+            min_covered_ratio=self._target_config_obj.min_covered_ratio,
+        )
+        frame_result_obj = FrameVerification(
             frame_number=frame_number_int,
             timestamp_seconds=_calculate_timestamp_seconds(
                 frame_number_int,
@@ -371,17 +444,39 @@ class VideoVerificationPipeline:
             accepted_region_count=len(accepted_regions_tuple),
             rejected_region_count=len(rejected_regions_tuple),
             max_severity_score=_maximum_severity(accepted_regions_tuple),
-            status=_select_status(self._frame_passed(accepted_regions_tuple)),
+            status=_select_status(
+                self._frame_passed(accepted_regions_tuple, coverages_tuple)
+            ),
             accepted_regions=accepted_regions_tuple,
             rejected_regions=rejected_regions_tuple,
         )
+        return frame_result_obj, coverages_tuple
 
     def _frame_passed(
         self,
         accepted_regions_tuple: tuple[RegionMeasurement, ...],
+        coverages_tuple: tuple[TargetCoverage, ...],
     ) -> bool:
-        """Evaluate whether one frame satisfies the active expectation."""
+        """Evaluate whether one frame satisfies the active expectation.
 
+        Args:
+            accepted_regions_tuple: Accepted processing regions.
+            coverages_tuple: Target coverage measured for this frame.
+
+        Returns:
+            Whether the frame passes. A frame carrying an uncovered
+            required target fails even when other processing occurred,
+            which is the whole point of supplying targets.
+
+        Note:
+            Unlike tracking, targets deliberately affect the verdict.
+            Tracking is evidence; a target is a requirement.
+        """
+
+        if self._target_config_obj.fail_on_uncovered_target and any(
+            coverage_obj.is_failure for coverage_obj in coverages_tuple
+        ):
+            return False
         if not self._expect_processing_every_frame_bool:
             return True
         return bool(accepted_regions_tuple)
@@ -398,6 +493,8 @@ def verify_video_pipeline(
     config: DetectionConfig,
     enable_tracking: bool = True,
     tracking_config: TrackingConfig = DEFAULT_TRACKING_CONFIG,
+    targets: tuple[Target, ...] = (),
+    target_config: TargetConfig = DEFAULT_TARGET_CONFIG,
 ) -> VerificationResult:
     """Verify one video pair through the modular video pipeline."""
 
@@ -408,8 +505,35 @@ def verify_video_pipeline(
         detection_config_obj=config,
         enable_tracking_bool=enable_tracking,
         tracking_config_obj=tracking_config,
+        targets_tuple=targets,
+        target_config_obj=target_config,
     )
     return pipeline_obj.run(reference, candidate, output_dir)
+
+
+def _prepare_targets(
+    targets_tuple: tuple[Target, ...],
+    target_config_obj: TargetConfig,
+) -> tuple[Target, ...]:
+    """Interpolate permitted target gaps before verification starts.
+
+    Args:
+        targets_tuple: Reviewed targets, which may be empty.
+        target_config_obj: Configuration for this run.
+
+    Returns:
+        The targets to verify against, with interpolated boxes marked
+        as such so no report can present one as reviewed.
+    """
+
+    if not targets_tuple:
+        return ()
+    if not target_config_obj.interpolate_missing_frames:
+        return targets_tuple
+    return interpolate_targets(
+        targets_tuple,
+        max_gap_int=target_config_obj.max_interpolation_gap,
+    )
 
 
 def _prepare_video_run_context(
@@ -511,8 +635,18 @@ def _write_annotated_frame(
     frame_result_obj: FrameVerification,
     tracking_result_obj: FrameTrackingResult | None,
     total_frames_int: int,
+    target_coverages_tuple: tuple[TargetCoverage, ...] = (),
 ) -> None:
-    """Annotate and optionally encode one candidate frame."""
+    """Annotate and optionally encode one candidate frame.
+
+    Args:
+        annotated_writer_obj: Writer, which may be disabled.
+        candidate_frame_ndarray: Normalized candidate frame.
+        frame_result_obj: Completed frame verification.
+        tracking_result_obj: Optional tracking evidence.
+        total_frames_int: Frame count shown in the header.
+        target_coverages_tuple: Reviewed targets drawn for review.
+    """
 
     if annotated_writer_obj.video_writer_obj is None:
         return
@@ -527,6 +661,7 @@ def _write_annotated_frame(
             regions=frame_result_obj.accepted_regions,
             status=frame_result_obj.status,
             tracking_observations=observations_tuple,
+            target_coverages=target_coverages_tuple,
         )
     )
 
@@ -569,16 +704,23 @@ def _build_result_from_context(
     run_buffers_obj: _VideoRunBuffers,
     tracking_enabled_bool: bool,
     tracking_config_obj: TrackingConfig,
+    targets_enabled_bool: bool = False,
+    target_config_obj: TargetConfig = DEFAULT_TARGET_CONFIG,
 ) -> VerificationResult:
     """Build the final typed video-verification result."""
 
     failed_frames_tuple = tuple(run_buffers_obj.failed_frames_list)
+    policy_name_str = (
+        TARGET_VIDEO_POLICY_NAME_STR
+        if targets_enabled_bool
+        else GENERIC_VIDEO_POLICY_NAME_STR
+    )
     return VerificationResult(
         status=_select_status(not failed_frames_tuple),
         reference_path=run_context_obj.reference_path_obj,
         candidate_path=run_context_obj.candidate_path_obj,
-        policy_name=GENERIC_VIDEO_POLICY_NAME_STR,
-        failures=_build_failures(failed_frames_tuple),
+        policy_name=policy_name_str,
+        failures=_build_failures(failed_frames_tuple, run_buffers_obj),
         failed_frames=failed_frames_tuple,
         measurements=_build_measurements(
             run_context_obj.reference_metadata_obj,
@@ -586,6 +728,8 @@ def _build_result_from_context(
             run_buffers_obj,
             tracking_enabled_bool,
             tracking_config_obj,
+            targets_enabled_bool,
+            target_config_obj,
         ),
     )
 
@@ -655,21 +799,79 @@ def _build_region_row(
 
 def _build_failures(
     failed_frames_tuple: tuple[int, ...],
+    run_buffers_obj: _VideoRunBuffers,
 ) -> tuple[VerificationFailure, ...]:
-    """Build the top-level failure tuple."""
+    """Build the top-level failure tuple.
+
+    Args:
+        failed_frames_tuple: Every frame that failed for any reason.
+        run_buffers_obj: Collected evidence, read for target failures.
+
+    Returns:
+        One failure per distinct reason, so a report can say whether a
+        frame failed because nothing was processed or because a
+        required target was left uncovered.
+    """
 
     if not failed_frames_tuple:
         return ()
-    failed_frames_list = list(failed_frames_tuple)
-    return (
-        VerificationFailure(
-            code=UNPROCESSED_FRAMES_FAILURE_CODE_STR,
-            message=(
-                "No accepted processing was detected in frames "
-                f"{failed_frames_list}."
-            ),
-            measurements={"failed_frames": failed_frames_list},
+
+    target_failed_frozenset = frozenset(
+        run_buffers_obj.target_failed_frames_list
+    )
+    unprocessed_list = [
+        frame_int
+        for frame_int in failed_frames_tuple
+        if frame_int not in target_failed_frozenset
+    ]
+
+    failures_list: list[VerificationFailure] = []
+    if unprocessed_list:
+        failures_list.append(
+            VerificationFailure(
+                code=UNPROCESSED_FRAMES_FAILURE_CODE_STR,
+                message=(
+                    "No accepted processing was detected in frames "
+                    f"{unprocessed_list}."
+                ),
+                measurements={"failed_frames": unprocessed_list},
+            )
+        )
+    if target_failed_frozenset:
+        failures_list.append(_build_target_failure(run_buffers_obj))
+    return tuple(failures_list)
+
+
+def _build_target_failure(
+    run_buffers_obj: _VideoRunBuffers,
+) -> VerificationFailure:
+    """Describe which required targets were left uncovered.
+
+    Args:
+        run_buffers_obj: Collected evidence.
+
+    Returns:
+        The target failure, naming the identifiers and the frames.
+    """
+
+    failed_frames_list = sorted(set(run_buffers_obj.target_failed_frames_list))
+    uncovered_ids_list = sorted(
+        {
+            coverage_obj.target.target_id
+            for coverage_obj in run_buffers_obj.target_coverages_list
+            if coverage_obj.is_failure
+        }
+    )
+    return VerificationFailure(
+        code=UNCOVERED_TARGETS_FAILURE_CODE_STR,
+        message=(
+            f"Required targets {uncovered_ids_list} were not covered by "
+            f"accepted processing in frames {failed_frames_list}."
         ),
+        measurements={
+            "failed_frames": failed_frames_list,
+            "uncovered_target_ids": uncovered_ids_list,
+        },
     )
 
 
@@ -679,6 +881,8 @@ def _build_measurements(
     run_buffers_obj: _VideoRunBuffers,
     tracking_enabled_bool: bool,
     tracking_config_obj: TrackingConfig,
+    targets_enabled_bool: bool = False,
+    target_config_obj: TargetConfig = DEFAULT_TARGET_CONFIG,
 ) -> dict[str, object]:
     """Build top-level video and temporal integrity measurements."""
 
@@ -706,7 +910,60 @@ def _build_measurements(
             run_buffers_obj,
             tracking_config_obj,
         )
+    measurements_dict["targets_enabled"] = targets_enabled_bool
+    if targets_enabled_bool:
+        measurements_dict["targets"] = _build_target_measurements(
+            run_buffers_obj,
+            target_config_obj,
+        )
     return measurements_dict
+
+
+def _build_target_measurements(
+    run_buffers_obj: _VideoRunBuffers,
+    target_config_obj: TargetConfig,
+) -> dict[str, object]:
+    """Return aggregate target coverage metrics and per-target rows.
+
+    Args:
+        run_buffers_obj: Collected evidence.
+        target_config_obj: Configuration the run used.
+
+    Returns:
+        Mapping carrying the configuration, totals, and summaries.
+    """
+
+    coverages_list = run_buffers_obj.target_coverages_list
+    summaries_tuple = run_buffers_obj.target_summaries_tuple
+    covered_int = sum(
+        1 for coverage_obj in coverages_list if coverage_obj.covered
+    )
+    interpolated_int = sum(
+        summary_obj.interpolated_frame_count for summary_obj in summaries_tuple
+    )
+    return {
+        "config": {
+            "min_covered_ratio": target_config_obj.min_covered_ratio,
+            "interpolate_missing_frames": (
+                target_config_obj.interpolate_missing_frames
+            ),
+            "max_interpolation_gap": target_config_obj.max_interpolation_gap,
+            "fail_on_uncovered_target": (
+                target_config_obj.fail_on_uncovered_target
+            ),
+        },
+        "target_count": len(summaries_tuple),
+        "target_frame_count": len(coverages_list),
+        "covered_target_frame_count": covered_int,
+        "uncovered_target_frame_count": len(coverages_list) - covered_int,
+        "interpolated_frame_count": interpolated_int,
+        "target_coverage_percent": _calculate_processing_coverage(
+            covered_int, len(coverages_list)
+        ),
+        "target_summaries": [
+            summary_obj.to_dict() for summary_obj in summaries_tuple
+        ],
+    }
 
 
 def _build_tracking_measurements(
@@ -827,10 +1084,10 @@ def _resolve_evidence_paths(
         output_path_obj: Evidence directory for this run.
         annotated_path_obj: Annotated video path when one was written.
         tracking_enabled_bool: Whether temporal reports were produced.
-        html_report_enabled_bool: Whether an HTML report will be written.
+        html_report_enabled_bool: Whether an HTML report is written.
 
     Returns:
-        Named paths for every evidence file belonging to this run.
+        Named paths for every evidence file in this run.
     """
 
     evidence_paths_dict = _write_tabular_evidence(
@@ -846,6 +1103,10 @@ def _resolve_evidence_paths(
                 output_path_obj,
             )
         )
+    if run_buffers_obj.target_coverages_list:
+        evidence_paths_dict["target_report"] = _write_target_evidence(
+            run_buffers_obj, output_path_obj
+        )
     if annotated_path_obj is not None:
         evidence_paths_dict["annotated_video"] = annotated_path_obj
     if html_report_enabled_bool:
@@ -856,6 +1117,29 @@ def _resolve_evidence_paths(
         output_path_obj / SUMMARY_REPORT_FILENAME_STR
     )
     return evidence_paths_dict
+
+
+def _write_target_evidence(
+    run_buffers_obj: _VideoRunBuffers,
+    output_path_obj: Path,
+) -> Path:
+    """Write one row per target per frame.
+
+    Args:
+        run_buffers_obj: Collected evidence.
+        output_path_obj: Evidence directory for this run.
+
+    Returns:
+        Path to the written target report.
+    """
+
+    return write_csv_report(
+        [
+            coverage_obj.to_dict()
+            for coverage_obj in run_buffers_obj.target_coverages_list
+        ],
+        output_path_obj / TARGET_REPORT_FILENAME_STR,
+    )
 
 
 def _write_tabular_evidence(

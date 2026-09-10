@@ -58,6 +58,42 @@ Three properties are part of its contract and are enforced by tests:
 The rendered text is for humans and is not a stable interface. Parse
 `summary.json` or the CSV reports instead.
 
+## Target evidence
+
+Written only when `--targets` is supplied.
+
+`target_report.csv`
+: One row per target per frame, carrying the box, `target_type`,
+`source`, `required`, the measured `covered_ratio`, whether it counted as
+`covered`, how many accepted regions contributed, and whether it is a
+failure.
+
+`measurements.targets` in `summary.json` contains:
+
+- `config`
+- `target_count`
+- `target_frame_count`
+- `covered_target_frame_count`
+- `uncovered_target_frame_count`
+- `interpolated_frame_count`
+- `target_coverage_percent`
+- `target_summaries`
+
+Each entry of `target_summaries` carries `target_id`, `target_type`,
+`first_frame`, `last_frame`, `frame_count`, `covered_frame_count`,
+`uncovered_frames`, `coverage_ratio`, `mean_covered_ratio`,
+`interpolated_frame_count`, and `required`.
+
+`measurements.targets_enabled` is always present and is `false` when no
+targets were supplied.
+
+Supplying targets changes `policy_name` from `generic_change_every_frame`
+to `target_coverage_every_frame`, and adds an `UNCOVERED_TARGETS` failure
+alongside the existing `UNPROCESSED_FRAMES` one. The two are reported
+separately so a reviewer can tell a skipped frame from a frame that was
+processed in the wrong place. See
+[Target annotation](target_annotation.md).
+
 ## Frame and region evidence
 
 `frame_report.csv`

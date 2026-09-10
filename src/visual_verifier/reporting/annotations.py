@@ -5,6 +5,7 @@ from __future__ import annotations
 import cv2
 
 from visual_verifier.models import RegionMeasurement, VerificationStatus
+from visual_verifier.targets.models import TargetCoverage, TargetSource
 from visual_verifier.tracking.models import (
     TrackLifecycleState,
     TrackObservation,
@@ -12,6 +13,11 @@ from visual_verifier.tracking.models import (
 from visual_verifier.type_aliases import ImageArray
 
 REGION_COLOR_BGR = (0, 255, 0)
+COVERED_TARGET_COLOR_BGR = (255, 200, 0)
+UNCOVERED_TARGET_COLOR_BGR = (0, 0, 255)
+TARGET_BORDER_THICKNESS_INT = 2
+TARGET_LABEL_OFFSET_Y_INT = 6
+INTERPOLATED_MARK_TEXT = "~"
 PASS_HEADER_COLOR_BGR = (0, 255, 255)
 FAILURE_HEADER_COLOR_BGR = (0, 0, 255)
 REGION_BORDER_THICKNESS_INT = 2
@@ -34,6 +40,7 @@ def annotate_frame(
     regions: tuple[RegionMeasurement, ...],
     status: VerificationStatus,
     tracking_observations: tuple[TrackObservation, ...] = (),
+    target_coverages: tuple[TargetCoverage, ...] = (),
 ) -> ImageArray:
     """Return a frame annotated with verification and tracking evidence.
 
@@ -44,6 +51,8 @@ def annotate_frame(
         regions: Accepted regions to draw on the frame.
         status: Verification outcome shown in the header.
         tracking_observations: Optional track identity for each region.
+        target_coverages: Optional reviewed targets, drawn so a reviewer
+            can see at a glance which required region was missed.
 
     Returns:
         Independent annotated copy of the supplied frame.
@@ -59,6 +68,7 @@ def annotate_frame(
         regions,
         observation_lookup_dict,
     )
+    _draw_target_annotations(annotated_frame_ndarray, target_coverages)
     _draw_header(
         annotated_frame_ndarray,
         frame_number,
@@ -67,6 +77,78 @@ def annotate_frame(
         status,
     )
     return annotated_frame_ndarray
+
+
+def _draw_target_annotations(
+    annotated_frame_ndarray: ImageArray,
+    target_coverages_tuple: tuple[TargetCoverage, ...],
+) -> None:
+    """Draw every reviewed target box and its coverage verdict.
+
+    Args:
+        annotated_frame_ndarray: Frame modified in place.
+        target_coverages_tuple: Measured coverage for this frame.
+    """
+
+    for coverage_obj in target_coverages_tuple:
+        color_bgr = (
+            COVERED_TARGET_COLOR_BGR
+            if coverage_obj.covered
+            else UNCOVERED_TARGET_COLOR_BGR
+        )
+        box_obj = coverage_obj.target.box
+        cv2.rectangle(
+            annotated_frame_ndarray,
+            (box_obj.x1, box_obj.y1),
+            (box_obj.x2, box_obj.y2),
+            color_bgr,
+            TARGET_BORDER_THICKNESS_INT,
+        )
+        _draw_target_label(annotated_frame_ndarray, coverage_obj, color_bgr)
+
+
+def _draw_target_label(
+    annotated_frame_ndarray: ImageArray,
+    coverage_obj: TargetCoverage,
+    color_bgr: tuple[int, int, int],
+) -> None:
+    """Draw one target's identifier and measured coverage.
+
+    An interpolated box is marked, because a reviewer must be able to
+    tell which boxes a human actually drew.
+
+    Args:
+        annotated_frame_ndarray: Frame modified in place.
+        coverage_obj: Coverage measurement being labelled.
+        color_bgr: Colour matching the coverage verdict.
+    """
+
+    target_obj = coverage_obj.target
+    provenance_text = (
+        INTERPOLATED_MARK_TEXT
+        if target_obj.source is TargetSource.INTERPOLATED
+        else ""
+    )
+    label_text = (
+        f"{provenance_text}{target_obj.target_id} "
+        f"{coverage_obj.covered_ratio:.0%}"
+    )
+    cv2.putText(
+        annotated_frame_ndarray,
+        label_text,
+        (
+            target_obj.box.x1,
+            max(
+                REGION_TEXT_MINIMUM_Y_INT,
+                target_obj.box.y2 + TARGET_LABEL_OFFSET_Y_INT + 12,
+            ),
+        ),
+        TEXT_FONT_INT,
+        REGION_TEXT_SCALE_FLOAT,
+        color_bgr,
+        REGION_TEXT_THICKNESS_INT,
+        TEXT_LINE_TYPE_INT,
+    )
 
 
 def _draw_region_annotations(

@@ -199,7 +199,7 @@ writes a job summary, and uploads the evidence:
 
 ```yaml
 - name: Verify anonymization coverage
-  uses: SAMtheROCKET/visual-verifier@v0.2.0
+  uses: SAMtheROCKET/visual-verifier@v0.3.0
   with:
     reference: fixtures/source.mp4
     candidate: build/anonymized.mp4
@@ -293,11 +293,20 @@ drop to **0% recall** on compressed, noisy, and offset-blur footage,
 because a metric that averages the whole frame cannot separate a missing
 blur from a re-encode. Region-by-region measurement can.
 
-The benchmark also publishes the three families Visual Verifier itself
-scores 0% on — weak blur, partially covered targets, and a missed plate
-among several. All three are the same gap: *something* was processed,
-but not the thing that mattered. That is what
-[V5.3 target-aware verification](docs/target_annotation.md) is for.
+Three families defeat plain change detection entirely: weak blur,
+partially covered targets, and a missed plate among several. Every method
+above scores **0%** on all three, because all three are the same gap:
+*something* was processed, but not the thing that mattered.
+
+Telling the tool which region had to be anonymized closes all three and
+takes the benchmark to **100%**:
+
+```bash
+visual-verifier video --reference raw.mp4 --candidate out.mp4 \
+    --targets plates.csv --min-severity 50
+```
+
+See [Target annotation](docs/target_annotation.md).
 
 ## Verification contract
 
@@ -322,6 +331,25 @@ which the test suite executes on every run so the table below cannot drift:
 | --- | --- | --- |
 | Raw vs. fully blurred | `PASS` | None |
 | Raw vs. partially blurred | `FAIL` | `4, 8, 12` |
+
+### Verifying a specific region
+
+Supplying reviewed targets changes the question from *did anything
+change* to *did the required region change*:
+
+```bash
+visual-verifier video \
+    --reference raw.mp4 \
+    --candidate anonymized.mp4 \
+    --targets plates.csv
+```
+
+A frame where two of three plates were blurred passes the generic check
+and fails this one. Target boxes between reviewed frames are
+interpolated and always marked as such, so a generated box is never
+mistaken for one a human drew.
+[`docs/target_annotation.md`](docs/target_annotation.md) documents the
+file format and every limit.
 
 ## Evidence outputs
 
@@ -408,6 +436,7 @@ certificate and not a guarantee of anonymization. Read
 | [`docs/temporal_tracking.md`](docs/temporal_tracking.md) | Association, lifecycle, lineage, and metrics |
 | [`docs/github_action.md`](docs/github_action.md) | Every action input, output, and permission |
 | [`docs/benchmarks.md`](docs/benchmarks.md) | Measured comparison against global-metric baselines |
+| [`docs/target_annotation.md`](docs/target_annotation.md) | Reviewed target format, coverage, and interpolation |
 | [`docs/output_schema.md`](docs/output_schema.md) | Every report field |
 | [`docs/limitations.md`](docs/limitations.md) | Known failure modes and honest scope |
 | [`docs/use_cases.md`](docs/use_cases.md) | Suitable uses and unsupportable claims |
@@ -454,6 +483,7 @@ src/visual_verifier/tracking/  Temporal association and integrity analysis
 tests/                         Unit and end-to-end regressions
 examples/media/                Reproducible 15-frame fixtures
 examples/expected/             Executable demo contract
+examples/targets/              Reviewed target example
 docs/                          Architecture and behavior documentation
 benchmarks/                    Measured comparison against simpler methods
 scripts/                       Bootstrap, quality, cleanup, and release gates

@@ -65,10 +65,19 @@ gate in `pyproject.toml` must not be lowered to make a change pass.
 
 ## Current development phase
 
-V5.2, released as `0.2.0`: the modular typed foundation plus deterministic
-temporal tracking, lifecycle states, lineage events, integrity metrics, and
-temporal reports.
+V5.3, released as `0.3.0`: the modular typed foundation, deterministic
+temporal tracking, and reviewed target-aware verification.
 
-Tracking is evidence-only. It must never change the frame-level PASS/FAIL
-decision. Target-aware verification (V5.3) and the selectable policy system
-(V5.4) follow; see `ROADMAP.md`.
+Two rules govern what may change a verdict, and they differ:
+
+- **Tracking is evidence-only.** It must never change the frame-level
+  PASS/FAIL decision.
+- **Targets are a requirement, and deliberately do change it.** A frame
+  carrying an uncovered required target fails even when other processing
+  occurred. Supplying no targets must leave every previous result
+  identical, which `tests/test_target_verification.py` asserts.
+
+Never present an interpolated target box as a reviewed one. Provenance
+travels with every target into every report.
+
+The selectable policy system (V5.4) follows; see `ROADMAP.md`.

@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "Please cite Visual Verifier when using it in research."
 title: "Visual Verifier"
 type: software
-version: 0.2.0
-date-released: 2026-09-10
+version: 0.3.0
+date-released: 2026-09-11
 license: Apache-2.0
 authors:
   - family-names: "Dash"

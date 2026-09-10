@@ -1,0 +1,16 @@
+frame_number,target_id,target_type,x1,y1,x2,y2,required,source
+1,PLATE_A,plate,608,502,670,527,true,manual
+2,PLATE_A,plate,605,503,661,526,true,manual
+3,PLATE_A,plate,600,502,654,525,true,manual
+4,PLATE_A,plate,591,500,643,521,true,manual
+5,PLATE_A,plate,583,499,635,520,true,manual
+6,PLATE_A,plate,574,495,627,518,true,manual
+7,PLATE_A,plate,565,495,617,518,true,manual
+8,PLATE_A,plate,561,496,608,517,true,manual
+9,PLATE_A,plate,561,494,609,512,true,manual
+10,PLATE_A,plate,566,493,616,515,true,manual
+11,PLATE_A,plate,577,494,625,514,true,manual
+12,PLATE_A,plate,587,495,635,513,true,manual
+13,PLATE_A,plate,598,491,650,515,true,manual
+14,PLATE_A,plate,601,494,655,516,true,manual
+15,PLATE_A,plate,609,495,659,515,true,manual

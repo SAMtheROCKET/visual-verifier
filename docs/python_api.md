@@ -29,6 +29,8 @@ def verify_video(
     config: DetectionConfig = DEFAULT_DETECTION_CONFIG,
     enable_tracking: bool = True,
     tracking_config: TrackingConfig = DEFAULT_TRACKING_CONFIG,
+    targets: str | Path | Sequence[Target] | None = None,
+    target_config: TargetConfig = DEFAULT_TARGET_CONFIG,
 ) -> VerificationResult
 ```
 
@@ -43,6 +45,8 @@ def verify_video(
 | `config` | Region-detection and severity thresholds |
 | `enable_tracking` | Associate accepted regions through time |
 | `tracking_config` | Temporal association and lifecycle settings |
+| `targets` | Reviewed targets, as a CSV path or a loaded sequence |
+| `target_config` | Target coverage and interpolation settings |
 
 ```python
 from visual_verifier import verify_video
@@ -157,6 +161,72 @@ except VisualVerifierError as error:
     print(error.error_code)
     print(error.to_dict())   # {"error_code": ..., "message": ..., "context": {...}}
 ```
+
+## Verifying reviewed targets
+
+Supplying targets changes the question from *did anything change* to
+*did the required region change*, and can therefore change the verdict.
+Everything else about the call is unchanged.
+
+```python
+from visual_verifier import verify_video
+
+result = verify_video(
+    reference="raw.mp4",
+    candidate="anonymized.mp4",
+    targets="plates.csv",
+    output_dir="outputs/check",
+)
+
+print(result.policy_name)  # "target_coverage_every_frame"
+
+targets = result.measurements["targets"]
+print(targets["target_coverage_percent"])
+
+for summary in targets["target_summaries"]:
+    print(summary["target_id"], summary["uncovered_frames"])
+```
+
+Targets can also be built in memory, which is useful when they come from
+a review tool rather than a file:
+
+```python
+from visual_verifier import BoundingBox, Target, verify_video
+
+targets = [
+    Target(
+        frame_number=frame,
+        target_id="PLATE_A",
+        box=BoundingBox(x1=608, y1=502, x2=670, y2=527),
+        target_type="plate",
+    )
+    for frame in range(1, 16)
+]
+
+result = verify_video("raw.mp4", "out.mp4", targets=targets)
+```
+
+`TargetConfig` controls how strictly coverage is judged and how far
+interpolation may reach:
+
+```python
+from visual_verifier import TargetConfig, verify_video
+
+result = verify_video(
+    "raw.mp4",
+    "out.mp4",
+    targets="plates.csv",
+    target_config=TargetConfig(
+        min_covered_ratio=0.95,
+        max_interpolation_gap=3,
+        fail_on_uncovered_target=False,
+    ),
+)
+```
+
+An invalid target file raises `TargetValidationError` before any media
+is read, with the offending line number in its context. See
+[Target annotation](target_annotation.md).
 
 ## Reading tracking metrics
 

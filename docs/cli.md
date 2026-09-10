@@ -118,6 +118,22 @@ visual-verifier video --reference PATH --candidate PATH [options]
 
 See [Temporal tracking](temporal_tracking.md) for what each metric means.
 
+### Target options
+
+Supplying targets changes the question from *did anything change* to
+*did the required region change*, so unlike tracking these options can
+change the verdict.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--targets PATH` | none | Reviewed target CSV naming regions that must be anonymized |
+| `--target-min-coverage FLOAT` | `0.9` | Fraction of a target accepted processing must cover |
+| `--target-max-gap INT` | `5` | Longest run of missing frames interpolated between reviewed boxes |
+| `--no-target-interpolation` | off | Check only reviewed frames, interpolating nothing |
+| `--allow-uncovered-targets` | off | Record target coverage as evidence without failing the run |
+
+See [Target annotation](target_annotation.md) for the file format.
+
 ## Shared options
 
 Available on both `image` and `video`.

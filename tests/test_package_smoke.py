@@ -21,10 +21,11 @@ from visual_verifier.cli import main
 REPOSITORY_ROOT_PATH = Path(__file__).resolve().parents[1]
 CITATION_FILE_PATH = REPOSITORY_ROOT_PATH / "CITATION.cff"
 CITATION_VERSION_PATTERN = re.compile(r"^version:\s*(\S+)\s*$", re.MULTILINE)
-EXPECTED_VERSION_STR = "0.2.0"
+EXPECTED_VERSION_STR = "0.3.0"
 EXPECTED_PUBLIC_EXPORTS_FROZENSET = frozenset(
     {
         "DEFAULT_DETECTION_CONFIG",
+        "DEFAULT_TARGET_CONFIG",
         "DEFAULT_TRACKING_CONFIG",
         "BoundingBox",
         "ConfigurationError",
@@ -36,6 +37,11 @@ EXPECTED_PUBLIC_EXPORTS_FROZENSET = frozenset(
         "PolicyEvaluationError",
         "RegionMeasurement",
         "ReportWriteError",
+        "Target",
+        "TargetConfig",
+        "TargetCoverage",
+        "TargetSource",
+        "TargetSummary",
         "TargetValidationError",
         "TrackingConfig",
         "VerificationFailedError",

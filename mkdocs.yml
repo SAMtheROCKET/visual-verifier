@@ -70,6 +70,7 @@ nav:
       - GitHub Action: github_action.md
       - Use cases: use_cases.md
       - Benchmark: benchmarks.md
+      - Target annotation: target_annotation.md
   - Reference:
       - Command line: cli.md
       - Python API: python_api.md
@@ -80,7 +81,6 @@ nav:
       - Problem statement: problem_statement.md
       - Limitations: limitations.md
   - Roadmap:
-      - Target annotation (V5.3): target_annotation.md
       - Policy system (V5.4): policy_system.md
   - Contributing:
       - Architecture: architecture.md

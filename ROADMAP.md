@@ -16,7 +16,7 @@
 - Track, observation, and event reports
 - Temporal unit and video regressions
 
-## V5.3 — target-aware temporal verification
+## V5.3 / 0.3.0 — complete
 
 - Reviewed target CSV schema
 - Target validation and coordinate checks
@@ -24,6 +24,8 @@
 - Target-to-processing coverage
 - Target continuity and per-target failures
 - Review overlays and target reports
+- The Anonymization Gap Benchmark, measuring the whole of the above
+  against mean pixel difference, PSNR, and SSIM
 
 ## V5.4 — selectable policy system
 

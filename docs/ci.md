@@ -20,7 +20,7 @@ On GitHub the bundled action is three lines:
 
 ```yaml
 - name: Verify anonymization coverage
-  uses: SAMtheROCKET/visual-verifier@v0.2.0
+  uses: SAMtheROCKET/visual-verifier@v0.3.0
   with:
     reference: fixtures/source.mp4
     candidate: build/anonymized.mp4

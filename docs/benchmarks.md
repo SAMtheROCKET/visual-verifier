@@ -38,9 +38,10 @@ for the best these methods could ever do.
 
 **Visual Verifier runs at shipped defaults**, tuned to nothing.
 
-Ground truth is the question a user actually has — *was the target left
-exposed?* — not the narrower question Visual Verifier answers today.
-That choice is what makes the results below show where it falls short.
+Ground truth is the question a user actually has: *was the target left
+exposed?* That is deliberately broader than what change detection alone
+can answer, which is what makes the results below show where each method
+falls short rather than only where it wins.
 
 ## Results
 
@@ -49,16 +50,26 @@ That choice is what makes the results below show where it falls short.
 
 | Method | Missed-frame recall | False alarms | F1 | Operating point | Oracle F1 |
 | --- | ---: | ---: | ---: | --- | ---: |
+| **Visual Verifier + targets** | **100%** | **0.0%** | **1.00** | Reviewed targets, `--min-severity 50` | – |
 | **Visual Verifier** | **79%** | **0.0%** | **0.88** | Shipped defaults | – |
 | Mean pixel difference | 42% | 0.0% | 0.59 | Tuned on calibration | 0.72 |
 | PSNR threshold | 42% | 0.0% | 0.59 | Tuned on calibration | 0.92 |
 | SSIM threshold | 42% | 0.0% | 0.59 | Tuned on calibration | 0.70 |
 
-Visual Verifier finds 66 of the 84 exposed frames. Every global metric
-finds 35. None of the four raises a single false alarm.
+Visual Verifier finds 66 of the 84 exposed frames at shipped defaults.
+Every global metric finds 35. Given a reviewed target file, Visual
+Verifier finds all 84. None of the five raises a single false alarm.
+
+The target row is **not** a like-for-like comparison, and is labelled
+that way deliberately. It receives a reviewed box naming the region that
+had to be anonymized, which is information no baseline is given and
+which a human had to produce. It measures what the
+[target-aware workflow](target_annotation.md) buys, not a cleverer
+metric.
 
 | Method | Localizes frame | Localizes region | Temporal evidence | Needs tuning |
 | --- | :-: | :-: | :-: | :-: |
+| Visual Verifier + targets | Yes | Yes | Yes | No |
 | Visual Verifier | Yes | Yes | Yes | No |
 | Mean pixel difference | Yes | No | No | Yes |
 | PSNR threshold | Yes | No | No | Yes |
@@ -68,20 +79,20 @@ finds 35. None of the four raises a single false alarm.
 
 Missed-frame recall by family:
 
-| Failure family | Visual Verifier | Mean diff | PSNR | SSIM |
-| --- | ---: | ---: | ---: | ---: |
-| `one_missed_frame` | 100% | 67% | 67% | 67% |
-| `three_missed_frames` | 100% | 89% | 89% | 89% |
-| `long_gap` | 100% | 67% | 67% | 67% |
-| `fast_motion` | 100% | 100% | 100% | 100% |
-| `small_target` | 100% | 100% | 100% | 100% |
-| `offset_blur` | 100% | 0% | 0% | 0% |
-| `compressed` | 100% | 0% | 0% | 0% |
-| `compressed_small_target` | 100% | 0% | 0% | 0% |
-| `sensor_noise` | 100% | 0% | 0% | 0% |
-| `weak_blur` | 0% | 0% | 0% | 0% |
-| `partial_region` | 0% | 0% | 0% | 0% |
-| `multiple_targets` | 0% | 0% | 0% | 0% |
+| Failure family | VV | VV + targets | Mean diff | PSNR | SSIM |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `one_missed_frame` | 100% | 100% | 67% | 67% | 67% |
+| `three_missed_frames` | 100% | 100% | 89% | 89% | 89% |
+| `long_gap` | 100% | 100% | 67% | 67% | 67% |
+| `fast_motion` | 100% | 100% | 100% | 100% | 100% |
+| `small_target` | 100% | 100% | 100% | 100% | 100% |
+| `offset_blur` | 100% | 100% | 0% | 0% | 0% |
+| `compressed` | 100% | 100% | 0% | 0% | 0% |
+| `compressed_small_target` | 100% | 100% | 0% | 0% | 0% |
+| `sensor_noise` | 100% | 100% | 0% | 0% | 0% |
+| `weak_blur` | 0% | 100% | 0% | 0% | 0% |
+| `partial_region` | 0% | 100% | 0% | 0% | 0% |
+| `multiple_targets` | 0% | 100% | 0% | 0% | 0% |
 
 The pattern is the point. A global metric answers "did this frame change
 enough?" — so anything that changes the whole frame drowns the signal.
@@ -95,40 +106,44 @@ frame and a noisy frame are still frames in which no region changed
 enough to count as processing. That is why the bottom four rows read
 100% against three zeros.
 
-## Where Visual Verifier falls short
+## The semantic gap, and what closes it
 
-The last three rows are Visual Verifier's own failures, and they matter
-more than the wins.
+The last three rows are the interesting ones. Without targets, Visual
+Verifier scores **0%** on all of them, and so does every baseline.
 
 `weak_blur`, `partial_region`, and `multiple_targets` all describe a
 frame in which **something was processed, but not the thing that
-mattered**. Visual Verifier verifies that accepted visual change
-occurred. It does not know which object was supposed to change. A frame
+mattered**. Change detection verifies that accepted visual change
+occurred. It cannot know which object was supposed to change. A frame
 where two of three plates were blurred contains plenty of accepted
-change, so it passes — correctly, under the contract, and uselessly,
+change, so it passes: correctly, under the contract, and uselessly,
 under the user's actual question.
 
-This is the semantic gap, and it is exactly what
-[target-aware verification](target_annotation.md) is for.
+No threshold fixes this. Half a covered plate is still a strong,
+accepted region, and so is a correctly blurred plate beside a missed
+one. The missing information is not a number. It is *which region was
+required*.
 
-One of the three is partly recoverable today. `weak_blur` is a real
-region whose severity score is simply low, so raising the threshold
-rejects it:
+Supplying it closes all three:
 
 ```bash
 visual-verifier video --reference raw.mp4 --candidate out.mp4 \
-    --min-severity 50
+    --targets plates.csv --min-severity 50
 ```
 
-Measured on this benchmark, `--min-severity 50` catches every weak-blur
-frame with no new false alarms on correctly anonymized footage. The
-shipped default of `8.0` is deliberately permissive, because on real
-footage a high severity floor rejects legitimate processing too. Raise it
-when you know your pipeline applies a strong blur.
+`--targets` fixes `partial_region` and `multiple_targets`, because
+coverage is then measured against the declared box rather than against
+the frame.
 
-`partial_region` does not respond to any severity threshold: half a
-covered plate is still a strong, accepted region. Neither does
-`multiple_targets`. Both need to know what the target was.
+`--min-severity 50` is what fixes `weak_blur`, and the reason is worth
+being precise about: a blur too light to anonymize is still a real
+accepted region covering the target, so coverage alone accepts it.
+Raising the severity floor rejects it. Measured here, that catches every
+weak-blur frame with no new false alarms. The shipped default of `8.0`
+stays permissive because on real footage a high floor rejects legitimate
+processing; raise it when you know your pipeline applies a strong blur.
+
+Together they take the benchmark from 79% to 100%.
 
 ## Reproducing it
 
@@ -156,6 +171,10 @@ meaningful value is `2`.
 - **It measures one target per sequence.** The scored plate is always
   the first one, so `multiple_targets` measures whether a method notices
   a specific missed object, not how it ranks several.
+- **The target row is given information nobody else gets.** Its reviewed
+  boxes come from the same scene description that places the plate, so
+  they are exact. A real reviewer's boxes are approximate, and producing
+  them is work the other rows never have to do.
 - **The numbers are a snapshot.** They are produced by the code in this
   repository at the version documented in the changelog, and will move
   when detection defaults move.

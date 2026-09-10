@@ -172,8 +172,11 @@ def _render_scenario_key() -> str:
 def _short_name(method_obj: MethodResult) -> str:
     """Return a compact column heading for one method."""
 
-    return method_obj.name_str.replace(" threshold", "").replace(
-        "Mean pixel difference", "Mean diff"
+    return (
+        method_obj.name_str.replace(" threshold", "")
+        .replace("Mean pixel difference", "Mean diff")
+        .replace("Visual Verifier + targets", "VV + targets")
+        .replace("Visual Verifier", "VV")
     )
 
 

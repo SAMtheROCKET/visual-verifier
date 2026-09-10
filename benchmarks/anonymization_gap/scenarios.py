@@ -115,6 +115,8 @@ class BenchmarkSequence:
         frame_count_int: Frames in each clip.
         seed_int: Layout seed, used to split calibration from evaluation.
         is_calibration_family_bool: Whether the family may be tuned on.
+        targets_path: Reviewed target file naming the box that had to be
+            anonymized in each frame.
     """
 
     scenario_name_str: str
@@ -125,6 +127,7 @@ class BenchmarkSequence:
     frame_count_int: int
     seed_int: int
     is_calibration_family_bool: bool
+    targets_path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +317,8 @@ def _build_one_sequence(
         seed_int,
         is_candidate_bool=True,
     )
+    targets_path_obj = sequence_directory_path / "targets.csv"
+    _write_targets(targets_path_obj, scenario_spec, seed_int)
 
     return BenchmarkSequence(
         scenario_name_str=scenario_spec.name_str,
@@ -324,7 +329,37 @@ def _build_one_sequence(
         frame_count_int=FRAME_COUNT_INT,
         seed_int=seed_int,
         is_calibration_family_bool=(scenario_spec.is_calibration_family_bool),
+        targets_path=targets_path_obj,
     )
+
+
+def _write_targets(
+    targets_path_obj: Path,
+    scenario_spec: ScenarioSpec,
+    seed_int: int,
+) -> None:
+    """Write the reviewed target file for one sequence.
+
+    The scored target is the first plate in the scene, which is the one
+    the family's failure is applied to. This stands in for a reviewer
+    having drawn the box that had to be anonymized.
+
+    Args:
+        targets_path_obj: Destination CSV path.
+        scenario_spec: Family being generated.
+        seed_int: Layout seed.
+    """
+
+    lines_list = ["frame_number,target_id,target_type,x1,y1,x2,y2"]
+    for frame_number_int in range(1, FRAME_COUNT_INT + 1):
+        box_tuple = target_boxes(
+            frame_number_int, scenario_spec.scene_spec, seed_int
+        )[0]
+        lines_list.append(
+            f"{frame_number_int},PLATE_A,plate,"
+            f"{box_tuple[0]},{box_tuple[1]},{box_tuple[2]},{box_tuple[3]}"
+        )
+    targets_path_obj.write_text("\n".join(lines_list) + "\n", encoding="utf-8")
 
 
 def _write_clip(

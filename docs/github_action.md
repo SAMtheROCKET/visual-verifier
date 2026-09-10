@@ -6,7 +6,7 @@ naming the failing frames, and uploads the evidence.
 
 ```yaml
 - name: Verify anonymization coverage
-  uses: SAMtheROCKET/visual-verifier@v0.2.0
+  uses: SAMtheROCKET/visual-verifier@v0.3.0
   with:
     reference: fixtures/source.mp4
     candidate: build/anonymized.mp4
@@ -48,7 +48,7 @@ branch would let a release change a verdict without any change to your
 repository. Pin a tag:
 
 ```yaml
-uses: SAMtheROCKET/visual-verifier@v0.2.0
+uses: SAMtheROCKET/visual-verifier@v0.3.0
 ```
 
 ## Inputs
@@ -72,7 +72,7 @@ uses: SAMtheROCKET/visual-verifier@v0.2.0
 [command-line option](cli.md) is available through it:
 
 ```yaml
-- uses: SAMtheROCKET/visual-verifier@v0.2.0
+- uses: SAMtheROCKET/visual-verifier@v0.3.0
   with:
     reference: fixtures/source.mp4
     candidate: build/anonymized.mp4
@@ -99,7 +99,7 @@ Reading an output is the way to record a result without gating on it:
 ```yaml
 - name: Verify anonymization coverage
   id: verify
-  uses: SAMtheROCKET/visual-verifier@v0.2.0
+  uses: SAMtheROCKET/visual-verifier@v0.3.0
   with:
     reference: fixtures/source.mp4
     candidate: build/anonymized.mp4
@@ -129,7 +129,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: SAMtheROCKET/visual-verifier@v0.2.0
+      - uses: SAMtheROCKET/visual-verifier@v0.3.0
         with:
           reference: fixtures/source.mp4
           candidate: build/anonymized.mp4
@@ -142,7 +142,7 @@ request gets one current result rather than a column of stale ones.
 ## Verifying an image instead
 
 ```yaml
-- uses: SAMtheROCKET/visual-verifier@v0.2.0
+- uses: SAMtheROCKET/visual-verifier@v0.3.0
   with:
     mode: image
     reference: fixtures/source.png

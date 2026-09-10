@@ -6,10 +6,74 @@ All notable changes to Visual Verifier are documented here.
 
 ### Planned
 
-- Reviewed target annotations and target-level temporal coverage
-- Target continuity and required-object failure policies
+- Selectable policy system with a typed policy protocol
 - Batch verification and aggregate reports
 - Alignment and synchronization diagnostics
+
+## [0.3.0] - 2026-09-11
+
+V5.3, target-aware verification. Until now the tool could say that
+accepted visual change occurred in every frame. It could not say that
+*the region which had to be anonymized* was the region that changed. A
+frame where two of three licence plates were blurred passed, correctly
+under the contract and uselessly for the reviewer.
+
+The published benchmark measures the difference: without targets, plain
+change detection scores 0% on weak blur, partially covered targets, and
+a missed plate among several. With reviewed targets and a strict
+severity floor it scores 100% on all three, taking the whole benchmark
+from 79% to 100% recall with no false alarms.
+
+### Added
+
+- `--targets PATH`, accepting a reviewed target CSV that declares the
+  regions which must be anonymized. Supplying it changes the policy from
+  `generic_change_every_frame` to `target_coverage_every_frame`
+- `visual_verifier.targets`, with `Target`, `TargetCoverage`,
+  `TargetSource`, `TargetSummary`, `load_targets`, `interpolate_targets`,
+  `measure_frame_targets`, and `summarize_targets`
+- `TargetConfig` and `DEFAULT_TARGET_CONFIG`, exposing the coverage
+  threshold, interpolation limit, and whether an uncovered target fails
+  the run, with `--target-min-coverage`, `--target-max-gap`,
+  `--no-target-interpolation`, and `--allow-uncovered-targets`
+- `targets` and `target_config` arguments on `verify_video`, accepting
+  either a file path or already-loaded targets
+- Coverage measured as the **union** of every accepted region
+  overlapping a target rather than the best single region, so two
+  overlapping blur passes are not double counted and two partial passes
+  can jointly cover a target
+- Linear interpolation between reviewed boxes, refused across gaps
+  longer than `--target-max-gap`, because a target can leave and re-enter
+  a scene and a straight line across that would fabricate evidence
+- An `UNCOVERED_TARGETS` failure reported separately from
+  `UNPROCESSED_FRAMES`, so a reviewer can tell a skipped frame from a
+  frame processed in the wrong place
+- `target_report.csv` with one row per target per frame, and
+  `measurements.targets` in `summary.json`
+- Target overlays on the annotated video, coloured by coverage verdict
+  and prefixed with `~` when the box was interpolated
+- `examples/targets/demo_targets.csv`, which reproduces the demo
+  contract: `PASS` against the fully blurred clip and `FAIL` on frames
+  4, 8, and 12 against the partially blurred one
+- A `Visual Verifier + targets` row in the Anonymization Gap Benchmark,
+  labelled as not a like-for-like comparison because it receives
+  information no baseline is given
+- 58 target regressions across `tests/test_targets.py` and
+  `tests/test_target_verification.py`, including one asserting that
+  supplying no targets leaves every previous result identical
+
+### Changed
+
+- Strict target validation rejects a file rather than verifying part of
+  it. A missing column, a frame number below one, a box with no positive
+  area, a negative coordinate, a duplicate identifier within one frame,
+  or an unrecognized `required` or `source` value each fail with the
+  offending line number. Treating an unreadable flag as `true` would
+  have hidden the typo a reviewer needs to see
+- Provenance travels with every target into every output, so a box this
+  package generated is never presented as one a human reviewed
+- `docs/target_annotation.md` documents shipped behaviour instead of
+  recording an intended design
 
 ## [0.2.0] - 2026-09-10
 

@@ -17,6 +17,10 @@ import pandas as pd
 from visual_verifier import __version__
 from visual_verifier.api import verify_image, verify_video
 from visual_verifier.config.defaults import DEFAULT_DETECTION_CONFIG
+from visual_verifier.config.targets import (
+    DEFAULT_TARGET_CONFIG,
+    TargetConfig,
+)
 from visual_verifier.config.tracking import (
     DEFAULT_TRACKING_CONFIG,
     TrackingConfig,
@@ -152,6 +156,24 @@ TRACKING_ARGUMENT_SPECS_TUPLE: tuple[_NumericArgumentSpec, ...] = (
         "FLOAT",
         "Minimum overlap used to detect split and merge lineage "
         "events (default: %(default)s).",
+    ),
+)
+TARGET_ARGUMENT_SPECS_TUPLE: tuple[_NumericArgumentSpec, ...] = (
+    _NumericArgumentSpec(
+        "--target-min-coverage",
+        float,
+        DEFAULT_TARGET_CONFIG.min_covered_ratio,
+        "FLOAT",
+        "Fraction of a target that accepted processing must cover "
+        "(default: %(default)s).",
+    ),
+    _NumericArgumentSpec(
+        "--target-max-gap",
+        int,
+        DEFAULT_TARGET_CONFIG.max_interpolation_gap,
+        "INT",
+        "Longest run of missing frames interpolated between two "
+        "reviewed target boxes (default: %(default)s).",
     ),
 )
 CLI_DESCRIPTION_TEXT = (
@@ -303,9 +325,38 @@ def run_video(arguments_namespace: argparse.Namespace) -> int:
         config=_build_detection_config(arguments_namespace),
         enable_tracking=(not arguments_namespace.no_tracking),
         tracking_config=_build_tracking_config(arguments_namespace),
+        targets=arguments_namespace.targets,
+        target_config=_build_target_config(arguments_namespace),
     )
     _emit_verification_result(result_obj, arguments_namespace)
     return _verification_exit_code(result_obj)
+
+
+def _build_target_config(
+    arguments_namespace: argparse.Namespace,
+) -> TargetConfig:
+    """Build validated target settings from video CLI arguments.
+
+    Args:
+        arguments_namespace: Parsed ``video`` command arguments.
+
+    Returns:
+        Immutable target configuration for the requested run.
+
+    Raises:
+        ConfigurationError: When a supplied value is invalid.
+    """
+
+    return TargetConfig(
+        min_covered_ratio=arguments_namespace.target_min_coverage,
+        interpolate_missing_frames=(
+            not arguments_namespace.no_target_interpolation
+        ),
+        max_interpolation_gap=arguments_namespace.target_max_gap,
+        fail_on_uncovered_target=(
+            not arguments_namespace.allow_uncovered_targets
+        ),
+    )
 
 
 def _build_detection_config(
@@ -665,6 +716,7 @@ def _add_video_parser(
         help="Skip temporal tracking. Frame PASS/FAIL stays unchanged.",
     )
     _add_tracking_threshold_arguments(video_parser_obj)
+    _add_target_arguments(video_parser_obj)
 
 
 def _add_common_verification_arguments(
@@ -753,6 +805,45 @@ def _add_tracking_threshold_arguments(
         "--no-lineage-events",
         action="store_true",
         help="Keep tracking but omit split and merge lineage evidence.",
+    )
+
+
+def _add_target_arguments(
+    video_parser_obj: argparse.ArgumentParser,
+) -> None:
+    """Add reviewed-target arguments to the video subcommand.
+
+    Args:
+        video_parser_obj: Video subcommand parser.
+    """
+
+    video_parser_obj.add_argument(
+        "--targets",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Reviewed target CSV declaring regions that must be "
+            "anonymized. Supplying it changes the question from "
+            "whether anything changed to whether the required region "
+            "changed, so it can change the verdict."
+        ),
+    )
+    _add_numeric_arguments(video_parser_obj, TARGET_ARGUMENT_SPECS_TUPLE)
+    video_parser_obj.add_argument(
+        "--no-target-interpolation",
+        action="store_true",
+        help=(
+            "Use only reviewed target boxes. Frames between two "
+            "reviewed boxes are left unchecked instead of interpolated."
+        ),
+    )
+    video_parser_obj.add_argument(
+        "--allow-uncovered-targets",
+        action="store_true",
+        help=(
+            "Report target coverage as evidence without letting an "
+            "uncovered target fail verification."
+        ),
     )
 
 

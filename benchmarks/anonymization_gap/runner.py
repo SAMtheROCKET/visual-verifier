@@ -20,7 +20,7 @@ tuned to nothing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from benchmarks.anonymization_gap.baselines import (
@@ -40,8 +40,13 @@ from benchmarks.anonymization_gap.scoring import (
     flagged_frames_at,
 )
 from visual_verifier.api import verify_video
+from visual_verifier.config.defaults import DEFAULT_DETECTION_CONFIG
+from visual_verifier.models import DetectionConfig
 
 VISUAL_VERIFIER_NAME_STR = "Visual Verifier"
+TARGET_AWARE_NAME_STR = "Visual Verifier + targets"
+TARGET_SEVERITY_FLOOR_FLOAT = 50.0
+TARGET_TUNING_NOTE_STR = "Reviewed targets, --min-severity 50"
 DEFAULT_SEED_COUNT_INT = 6
 NO_TUNING_NOTE_STR = "Shipped defaults"
 CALIBRATED_NOTE_STR = "Tuned on held-out calibration half"
@@ -172,7 +177,12 @@ def run_benchmark(
     method_results_list = [
         _run_visual_verifier(
             evaluation_list, working_directory_path / "evidence"
-        )
+        ),
+        _run_visual_verifier(
+            evaluation_list,
+            working_directory_path / "target-evidence",
+            use_targets_bool=True,
+        ),
     ]
     method_results_list.extend(
         _run_baseline(baseline_obj, calibration_list, evaluation_list)
@@ -228,17 +238,87 @@ def _accumulate(
 def _run_visual_verifier(
     sequences_list: list[BenchmarkSequence],
     evidence_directory_path: Path,
+    *,
+    use_targets_bool: bool = False,
 ) -> MethodResult:
-    """Run Visual Verifier at shipped defaults over every sequence.
+    """Run Visual Verifier over every sequence.
 
     Args:
         sequences_list: Evaluation sequences.
         evidence_directory_path: Directory for per-sequence evidence.
+        use_targets_bool: Supply the reviewed target file, and raise the
+            severity floor so a blur too weak to anonymize is rejected.
+            This is more information than any baseline receives, which
+            is the point: it measures what a reviewed-target workflow
+            buys, not a like-for-like comparison.
 
     Returns:
         The measured result.
     """
 
+    total_counts_obj, per_scenario_counts_dict = _verify_sequences(
+        sequences_list,
+        evidence_directory_path,
+        use_targets_bool=use_targets_bool,
+    )
+    return MethodResult(
+        name_str=(
+            TARGET_AWARE_NAME_STR
+            if use_targets_bool
+            else VISUAL_VERIFIER_NAME_STR
+        ),
+        counts_obj=total_counts_obj,
+        per_scenario_counts_dict=per_scenario_counts_dict,
+        capabilities_obj=MethodCapabilities(
+            localizes_frame_bool=True,
+            localizes_region_bool=True,
+            temporal_evidence_bool=True,
+            needs_tuning_bool=False,
+        ),
+        tuning_note_str=(
+            TARGET_TUNING_NOTE_STR if use_targets_bool else NO_TUNING_NOTE_STR
+        ),
+    )
+
+
+def _detection_config_for(use_targets_bool: bool) -> DetectionConfig:
+    """Return the detection thresholds one method runs with.
+
+    Args:
+        use_targets_bool: Whether reviewed targets are supplied.
+
+    Returns:
+        Shipped defaults, or a strict severity floor alongside targets so
+        a blur too weak to anonymize is rejected rather than accepted.
+    """
+
+    if not use_targets_bool:
+        return DEFAULT_DETECTION_CONFIG
+    return replace(
+        DEFAULT_DETECTION_CONFIG,
+        min_severity_score=TARGET_SEVERITY_FLOOR_FLOAT,
+    )
+
+
+def _verify_sequences(
+    sequences_list: list[BenchmarkSequence],
+    evidence_directory_path: Path,
+    *,
+    use_targets_bool: bool,
+) -> tuple[ConfusionCounts, dict[str, ConfusionCounts]]:
+    """Verify every sequence and score it against the ground truth.
+
+    Args:
+        sequences_list: Evaluation sequences.
+        evidence_directory_path: Directory for per-sequence evidence.
+        use_targets_bool: Supply reviewed targets and a strict severity
+            floor.
+
+    Returns:
+        The combined counts and the per-family counts.
+    """
+
+    detection_config_obj = _detection_config_for(use_targets_bool)
     per_scenario_counts_dict: dict[str, ConfusionCounts] = {}
     total_counts_obj = ConfusionCounts()
 
@@ -249,6 +329,8 @@ def _run_visual_verifier(
             output_dir=evidence_directory_path / sequence_obj.sequence_id_str,
             save_annotated_video=False,
             save_html_report=False,
+            config=detection_config_obj,
+            targets=(sequence_obj.targets_path if use_targets_bool else None),
         )
         counts_obj = count_outcomes(
             frozenset(result_obj.failed_frames),
@@ -262,18 +344,7 @@ def _run_visual_verifier(
             counts_obj,
         )
 
-    return MethodResult(
-        name_str=VISUAL_VERIFIER_NAME_STR,
-        counts_obj=total_counts_obj,
-        per_scenario_counts_dict=per_scenario_counts_dict,
-        capabilities_obj=MethodCapabilities(
-            localizes_frame_bool=True,
-            localizes_region_bool=True,
-            temporal_evidence_bool=True,
-            needs_tuning_bool=False,
-        ),
-        tuning_note_str=NO_TUNING_NOTE_STR,
-    )
+    return total_counts_obj, per_scenario_counts_dict
 
 
 def _score_all(
