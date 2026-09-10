@@ -57,9 +57,9 @@ result = verify_video(
     output_dir="outputs/check",
 )
 
-print(result.status.value)   # "FAIL"
+print(result.status.value)  # "FAIL"
 print(result.failed_frames)  # (4, 8, 12)
-print(result.passed)         # False
+print(result.passed)  # False
 ```
 
 ## verify_image
@@ -91,8 +91,8 @@ Immutable. Every field is safe to keep and to serialize.
 | `evidence_paths` | `dict[str, Path]` | Every generated file, by name |
 
 ```python
-result.to_dict()          # JSON-ready document, same as summary.json
-result.raise_for_failure() # raises VerificationFailedError when failed
+result.to_dict()  # JSON-ready document, same as summary.json
+result.raise_for_failure()  # raises VerificationFailedError when failed
 ```
 
 ### Using it as a test assertion
@@ -133,7 +133,7 @@ tracking = TrackingConfig(
 try:
     DetectionConfig(min_box_area=-1)
 except ConfigurationError as error:
-    print(error.error_code)              # "CONFIGURATION_ERROR"
+    print(error.error_code)  # "CONFIGURATION_ERROR"
     print(error.context_dict["invalid_fields"])  # ["min_box_area"]
 ```
 
@@ -159,7 +159,9 @@ try:
     result = verify_video("raw.mp4", "missing.mp4")
 except VisualVerifierError as error:
     print(error.error_code)
-    print(error.to_dict())   # {"error_code": ..., "message": ..., "context": {...}}
+    print(
+        error.to_dict()
+    )  # {"error_code": ..., "message": ..., "context": {...}}
 ```
 
 ## Verifying reviewed targets
@@ -254,5 +256,5 @@ from visual_verifier.demo import run_demonstration
 
 demonstration = run_demonstration("visual-verifier-demo")
 print(demonstration.verification_result.failed_frames)  # (4, 8, 12)
-print(demonstration.behaved_as_documented)              # True
+print(demonstration.behaved_as_documented)  # True
 ```
