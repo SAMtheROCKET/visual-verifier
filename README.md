@@ -194,7 +194,23 @@ threshold.
 
 ## Use it in CI
 
-The exit code is the contract, so no wrapper script is required:
+On GitHub, the bundled action installs the tool, runs the comparison,
+writes a job summary, and uploads the evidence:
+
+```yaml
+- name: Verify anonymization coverage
+  uses: SAMtheROCKET/visual-verifier@v0.2.0
+  with:
+    reference: fixtures/source.mp4
+    candidate: build/anonymized.mp4
+```
+
+The summary names the failing frames, draws a frame timeline, and links
+the evidence artifact, so a reviewer sees the answer without downloading
+anything. [`docs/github_action.md`](docs/github_action.md) lists every
+input and output.
+
+Everywhere else the exit code is the contract, so no wrapper is required:
 
 ```yaml
 - name: Verify anonymization coverage
@@ -364,6 +380,7 @@ certificate and not a guarantee of anonymization. Read
 | [`docs/verification_contract.md`](docs/verification_contract.md) | The formal input/output contract |
 | [`docs/architecture.md`](docs/architecture.md) | Module boundaries and dependency direction |
 | [`docs/temporal_tracking.md`](docs/temporal_tracking.md) | Association, lifecycle, lineage, and metrics |
+| [`docs/github_action.md`](docs/github_action.md) | Every action input, output, and permission |
 | [`docs/output_schema.md`](docs/output_schema.md) | Every report field |
 | [`docs/limitations.md`](docs/limitations.md) | Known failure modes and honest scope |
 | [`docs/use_cases.md`](docs/use_cases.md) | Suitable uses and unsupportable claims |
@@ -412,6 +429,7 @@ examples/media/                Reproducible 15-frame fixtures
 examples/expected/             Executable demo contract
 docs/                          Architecture and behavior documentation
 scripts/                       Bootstrap, quality, cleanup, and release gates
+action.yml                     Composite GitHub Action wrapping the CLI
 archive/legacy_cells/          Read-only historical prototypes
 ```
 

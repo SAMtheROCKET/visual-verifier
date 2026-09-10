@@ -1,0 +1,244 @@
+name: Visual Verifier
+description: >-
+  Verify that blur, redaction, or masking covers every frame, and publish
+  the PASS/FAIL evidence as a job summary and a downloadable artifact.
+author: Sambit Supriya Dash
+
+branding:
+  icon: eye-off
+  color: gray-dark
+
+inputs:
+  reference:
+    description: Path to the original, unprocessed reference media.
+    required: true
+  candidate:
+    description: Path to the processed candidate media being verified.
+    required: true
+  mode:
+    description: Which comparison to run, either `video` or `image`.
+    required: false
+    default: video
+  output:
+    description: Directory the evidence set is written to.
+    required: false
+    default: visual-verifier-evidence
+  options:
+    description: >-
+      Extra command-line options passed through verbatim, for example
+      `--min-severity 12 --no-annotated-video`.
+    required: false
+    default: ""
+  requirement:
+    description: >-
+      Pip requirement installed before the run. Pin it, for example
+      `visual-verifier==0.2.0`, so a new release cannot change a result.
+    required: false
+    default: visual-verifier
+  python-version:
+    description: >-
+      Python version to set up. Set to an empty string to use the
+      interpreter already present on the runner.
+    required: false
+    default: "3.12"
+  fail-on-gap:
+    description: >-
+      Fail the job when verification completes and reports unprotected
+      frames. Set to `false` to record the evidence without gating.
+    required: false
+    default: "true"
+  upload-evidence:
+    description: Upload the evidence directory as a workflow artifact.
+    required: false
+    default: "true"
+  artifact-name:
+    description: Name of the uploaded evidence artifact.
+    required: false
+    default: visual-verifier-evidence
+  comment-on-pull-request:
+    description: >-
+      Post the summary as a pull-request comment, updating the previous
+      one instead of adding another. Needs `pull-requests: write`.
+    required: false
+    default: "false"
+  github-token:
+    description: Token used to post the pull-request comment.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  status:
+    description: Verification status, one of `PASS`, `FAIL`, or `ERROR`.
+    value: ${{ steps.verify.outputs.status }}
+  exit-code:
+    description: Raw exit code. `0` passed, `1` incomplete, `2` failed.
+    value: ${{ steps.verify.outputs.exit-code }}
+  failed-frame-count:
+    description: Number of frames without accepted processing.
+    value: ${{ steps.verify.outputs.failed-frame-count }}
+  processing-coverage-percent:
+    description: Percentage of checked frames containing accepted change.
+    value: ${{ steps.verify.outputs.processing-coverage-percent }}
+  evidence-path:
+    description: Directory holding the generated evidence set.
+    value: ${{ steps.verify.outputs.evidence-path }}
+  summary-path:
+    description: Path to the generated `summary.json` document.
+    value: ${{ steps.verify.outputs.summary-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      if: inputs.python-version != ''
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Visual Verifier
+      shell: bash
+      env:
+        VV_REQUIREMENT: ${{ inputs.requirement }}
+      run: |
+        python -m pip install --disable-pip-version-check \
+          "${VV_REQUIREMENT}"
+
+    - name: Verify
+      id: verify
+      shell: bash
+      env:
+        VV_MODE: ${{ inputs.mode }}
+        VV_REFERENCE: ${{ inputs.reference }}
+        VV_CANDIDATE: ${{ inputs.candidate }}
+        VV_OUTPUT: ${{ inputs.output }}
+        VV_OPTIONS: ${{ inputs.options }}
+      run: |
+        set +e
+        # Word splitting is intended: VV_OPTIONS carries extra flags.
+        # shellcheck disable=SC2086
+        visual-verifier "${VV_MODE}" \
+          --reference "${VV_REFERENCE}" \
+          --candidate "${VV_CANDIDATE}" \
+          --output "${VV_OUTPUT}" \
+          ${VV_OPTIONS}
+        exit_code=$?
+        set -e
+
+        summary_path="${VV_OUTPUT}/summary.json"
+        {
+          echo "exit-code=${exit_code}"
+          echo "evidence-path=${VV_OUTPUT}"
+          echo "summary-path=${summary_path}"
+        } >> "${GITHUB_OUTPUT}"
+
+        if [ ! -f "${summary_path}" ]; then
+          {
+            echo "status=ERROR"
+            echo "failed-frame-count="
+            echo "processing-coverage-percent="
+          } >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+
+        # Python is guaranteed here; jq is not present on slim images.
+        python - "${summary_path}" >> "${GITHUB_OUTPUT}" <<'PYTHON'
+        import json
+        import sys
+
+        with open(sys.argv[1], encoding="utf-8") as summary_file:
+            summary = json.load(summary_file)
+
+        measurements = summary.get("measurements") or {}
+        coverage = measurements.get("processing_coverage_percent", 0)
+        print(f"status={summary.get('status', 'ERROR')}")
+        print(f"failed-frame-count={len(summary.get('failed_frames') or [])}")
+        print(f"processing-coverage-percent={coverage}")
+        PYTHON
+
+    - name: Render summary
+      if: always() && steps.verify.outputs.summary-path != ''
+      shell: bash
+      env:
+        VV_SUMMARY_PATH: ${{ steps.verify.outputs.summary-path }}
+        VV_EVIDENCE_PATH: ${{ steps.verify.outputs.evidence-path }}
+        VV_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        rendered_path="${RUNNER_TEMP}/visual-verifier-summary.md"
+        if [ -f "${VV_SUMMARY_PATH}" ]; then
+          python "${VV_ACTION_PATH}/scripts/render_github_summary.py" \
+            "${VV_SUMMARY_PATH}" "${VV_EVIDENCE_PATH}" \
+            > "${rendered_path}"
+        else
+          {
+            echo "## Visual Verifier - ERROR"
+            echo
+            echo "Verification did not produce a summary document."
+            echo "The reported error is in the step log above."
+          } > "${rendered_path}"
+        fi
+        cat "${rendered_path}" >> "${GITHUB_STEP_SUMMARY}"
+        echo "VV_RENDERED_PATH=${rendered_path}" >> "${GITHUB_ENV}"
+
+    - name: Upload evidence
+      if: always() && inputs.upload-evidence == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.output }}
+        if-no-files-found: ignore
+
+    - name: Comment on pull request
+      if: >-
+        always()
+        && inputs.comment-on-pull-request == 'true'
+        && github.event.pull_request.number
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        VV_PULL_NUMBER: ${{ github.event.pull_request.number }}
+        VV_REPOSITORY: ${{ github.repository }}
+      run: |
+        if [ ! -f "${VV_RENDERED_PATH:-}" ]; then
+          echo "No rendered summary to post."
+          exit 0
+        fi
+
+        marker="<!-- visual-verifier-summary -->"
+        body_path="${RUNNER_TEMP}/visual-verifier-comment.md"
+        {
+          echo "${marker}"
+          echo
+          cat "${VV_RENDERED_PATH}"
+        } > "${body_path}"
+
+        comments_path="repos/${VV_REPOSITORY}/issues"
+        comments_path="${comments_path}/${VV_PULL_NUMBER}/comments"
+        existing_id=$(gh api "${comments_path}" --paginate --jq \
+          "map(select(.body | startswith(\"${marker}\"))) | .[0].id // empty")
+
+        if [ -n "${existing_id}" ]; then
+          gh api --method PATCH \
+            "repos/${VV_REPOSITORY}/issues/comments/${existing_id}" \
+            --field "body=@${body_path}" > /dev/null
+        else
+          gh api --method POST "${comments_path}" \
+            --field "body=@${body_path}" > /dev/null
+        fi
+
+    - name: Report result
+      if: always()
+      shell: bash
+      env:
+        VV_EXIT_CODE: ${{ steps.verify.outputs.exit-code }}
+        VV_FAIL_ON_GAP: ${{ inputs.fail-on-gap }}
+      run: |
+        exit_code="${VV_EXIT_CODE:-1}"
+        if [ "${exit_code}" = "0" ]; then
+          exit 0
+        fi
+        if [ "${exit_code}" = "2" ] && [ "${VV_FAIL_ON_GAP}" != "true" ]; then
+          echo "Unprotected frames found. Not gating the job because"
+          echo "fail-on-gap is false."
+          exit 0
+        fi
+        exit "${exit_code}"

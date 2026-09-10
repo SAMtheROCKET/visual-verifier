@@ -1,7 +1,8 @@
 # Use it in CI
 
 The exit code is the whole integration surface. No wrapper script, no
-plugin, and no report parsing required.
+plugin, and no report parsing required. The GitHub Action below is a
+convenience over that contract, not a replacement for it.
 
 | Exit code | Meaning |
 | ---: | --- |
@@ -13,7 +14,27 @@ Distinguishing `1` from `2` matters. `1` means the tool could not do its
 job, such as media missing, unreadable, or a threshold rejected. `2` means
 it did its job and the answer was no.
 
-## GitHub Actions
+## GitHub Action
+
+On GitHub the bundled action is three lines:
+
+```yaml
+- name: Verify anonymization coverage
+  uses: SAMtheROCKET/visual-verifier@v0.2.0
+  with:
+    reference: fixtures/source.mp4
+    candidate: build/anonymized.mp4
+```
+
+It installs the tool, runs the comparison, publishes a job summary naming
+the failing frames, uploads the evidence, and can keep one updated
+pull-request comment. Every input and output is documented on the
+[GitHub Action](github_action.md) page.
+
+## GitHub Actions without the action
+
+The action is a convenience, not a requirement. Two steps do the same job
+if you would rather not take the dependency.
 
 ```yaml
 - name: Install Visual Verifier

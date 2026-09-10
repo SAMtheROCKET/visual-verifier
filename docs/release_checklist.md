@@ -33,6 +33,17 @@
 - `uv run --with twine twine check --strict dist/*` passes
 - `uv run python scripts/check_release_version.py vX.Y.Z` passes for the
   tag you are about to push; the release workflow runs it too
+- The `SAMtheROCKET/visual-verifier@vX.Y.Z` references in `README.md`
+  and `docs/ci.md` name the tag being pushed, asserted by
+  `tests/test_github_action.py`
+
+## GitHub Action
+
+- The `GitHub Action self-test` job passed on the commit being tagged; it
+  runs `action.yml` against both bundled fixtures and asserts the
+  reported status, exit code, failed-frame count, and coverage
+- Push the tag before announcing the action, since `uses:` resolves the
+  tag rather than the branch
 
 ## Frame regression contract
 

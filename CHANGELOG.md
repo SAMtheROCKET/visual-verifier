@@ -44,6 +44,18 @@ stays `Pre-Alpha`: report schemas may still change before V6.0.
 - `scripts/run_quality.sh` for Linux and macOS contributors
 - macOS CI, a wheel install-and-run smoke check, a coverage gate, and a
   tag-triggered PyPI release workflow using trusted publishing
+- A composite GitHub Action, `action.yml`, that installs the tool, runs
+  the comparison, publishes a job summary with a frame timeline and the
+  failing frame numbers, uploads the evidence, and can keep one updated
+  pull-request comment. It exposes the status, exit code, unprotected
+  frame count, and processing coverage as step outputs, and gates the
+  job by default. `scripts/render_github_summary.py` renders the summary
+  from `summary.json` alone, so it cannot drift from the documented
+  output. A `GitHub Action self-test` job runs the action against both
+  bundled fixtures on every pull request, because a composite action is
+  shell that no unit test can reach
+- A `GitHub Action` documentation page listing every input, output, and
+  required permission
 - A documentation site built with MkDocs Material and published to
   GitHub Pages, with new Getting started, Anonymization QA, CI,
   Command line, and Python API pages that previously existed only as

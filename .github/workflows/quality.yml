@@ -108,6 +108,59 @@ jobs:
       - name: Run tests
         run: uv run --python ${{ matrix.python-version }} pytest -q
 
+  action-self-test:
+    name: GitHub Action self-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Verify the partially blurred fixture
+        id: partial
+        uses: ./
+        with:
+          reference: examples/media/video_raw.mp4
+          candidate: examples/media/video_blur_partial.mp4
+          requirement: .
+          options: --no-annotated-video
+          fail-on-gap: "false"
+          upload-evidence: "false"
+
+      - name: Confirm the failing contract
+        env:
+          VV_STATUS: ${{ steps.partial.outputs.status }}
+          VV_EXIT_CODE: ${{ steps.partial.outputs.exit-code }}
+          VV_FAILED: ${{ steps.partial.outputs.failed-frame-count }}
+          VV_COVERAGE: ${{ steps.partial.outputs.processing-coverage-percent }}
+          VV_SUMMARY: ${{ steps.partial.outputs.summary-path }}
+        run: |
+          test "${VV_STATUS}" = "FAIL"
+          test "${VV_EXIT_CODE}" = "2"
+          test "${VV_FAILED}" = "3"
+          test "${VV_COVERAGE}" = "80.0"
+          test -f "${VV_SUMMARY}"
+
+      - name: Verify the fully blurred fixture
+        id: full
+        uses: ./
+        with:
+          reference: examples/media/video_raw.mp4
+          candidate: examples/media/video_blur.mp4
+          requirement: .
+          options: --no-annotated-video
+          artifact-name: action-self-test-evidence
+
+      - name: Confirm the passing contract
+        env:
+          VV_STATUS: ${{ steps.full.outputs.status }}
+          VV_EXIT_CODE: ${{ steps.full.outputs.exit-code }}
+          VV_FAILED: ${{ steps.full.outputs.failed-frame-count }}
+        run: |
+          test "${VV_STATUS}" = "PASS"
+          test "${VV_EXIT_CODE}" = "0"
+          test "${VV_FAILED}" = "0"
+
   windows-regression:
     name: Windows regression
     runs-on: windows-latest

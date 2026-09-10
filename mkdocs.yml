@@ -67,6 +67,7 @@ nav:
   - Guides:
       - Anonymization QA: anonymization_qa.md
       - Use it in CI: ci.md
+      - GitHub Action: github_action.md
       - Use cases: use_cases.md
   - Reference:
       - Command line: cli.md
