@@ -280,12 +280,13 @@ reach for first. The
 [Anonymization Gap Benchmark](docs/benchmarks.md) measures what that
 costs, over 78 generated sequences carrying 13 labelled failure modes:
 
-| Method | Missed-frame recall | False alarms | Localizes region | Needs tuning |
-| --- | ---: | ---: | :-: | :-: |
-| **Visual Verifier** | **79%** | **0.0%** | Yes | No |
-| Mean pixel difference | 42% | 0.0% | No | Yes |
-| PSNR threshold | 42% | 0.0% | No | Yes |
-| SSIM threshold | 42% | 0.0% | No | Yes |
+| Method | Recall | False alarms | Localizes region | Operating point |
+| --- | ---: | ---: | :-: | --- |
+| **Visual Verifier + targets** | **100%** | **0.0%** | Yes | reviewed targets + severity floor 50 |
+| **Visual Verifier** | **79%** | **0.0%** | Yes | shipped defaults |
+| Mean pixel difference | 42% | 0.0% | No | threshold tuned on calibration |
+| PSNR threshold | 42% | 0.0% | No | threshold tuned on calibration |
+| SSIM threshold | 42% | 0.0% | No | threshold tuned on calibration |
 
 The global metrics are handed a held-out calibration set to pick their
 best threshold. Visual Verifier runs at shipped defaults. They still
@@ -397,16 +398,19 @@ jitter, area stability, recovery count, and split/merge involvement. See
 
 ## Current release
 
-Version `0.2.0` is the V5.2 milestone: **Temporal Tracking and Integrity
-Intelligence**. The package is early software: the API and report schemas
-may still change, and the trove classifier remains `Pre-Alpha`.
+Version `0.3.0` is the V5.3 milestone: **target-aware verification**.
+The package is early software classified `Alpha`: the API and report
+schemas may still change before a stable release.
 
 - Image-to-image and synchronized video verification
 - Multiple changed-region detection, filtering, and severity scoring
+- Reviewed targets declaring the regions that must be anonymized, with
+  union coverage, bounded interpolation, and explicit provenance
 - Deterministic IoU-based temporal association
 - Tentative, confirmed, lost, recovered, and closed track lifecycles
 - Configurable short-gap tolerance and split/merge lineage evidence
 - Track continuity, fragmentation, stability, and recovery metrics
+- A published benchmark measuring all of it against simpler methods
 - Typed Python API and a self-documenting CLI
 - Linux, macOS, and Windows CI across Python 3.10–3.13
 
@@ -493,8 +497,8 @@ archive/legacy_cells/          Read-only historical prototypes
 
 ## Roadmap
 
-V5.3 adds reviewed target-aware verification and target continuity while
-preserving V5.2 as the stable generic temporal layer. See
+V5.3 target-aware verification is complete. V5.4 adds the selectable
+policy system, and V5.5 batch verification. See
 [`ROADMAP.md`](ROADMAP.md).
 
 ## Licence and citation

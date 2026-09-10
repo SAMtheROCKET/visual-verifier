@@ -168,23 +168,53 @@ def test_report_states_the_limits_of_a_pass(
 
 
 def test_report_is_deterministic(tmp_path: Path) -> None:
-    """Confirm two runs over the same media produce identical documents."""
+    """Confirm two runs over the same media produce identical documents.
+
+    Only the two output directories differ between the runs, so only
+    those exact paths are normalized. Replacing a bare word such as
+    "second" would also rewrite any repository path containing it, which
+    once made this test fail on an implementation that was correct.
+    """
 
     documents_list: list[str] = []
-    for run_name_str in ("first", "second"):
+    for run_name_str in ("alpha", "beta"):
+        output_path_obj = tmp_path / run_name_str
         result_obj = verify_video(
             REFERENCE_VIDEO_PATH,
             PARTIAL_BLUR_VIDEO_PATH,
-            output_dir=tmp_path / run_name_str,
+            output_dir=output_path_obj,
             save_annotated_video=False,
         )
         documents_list.append(
-            result_obj.evidence_paths["html_report"]
-            .read_text(encoding="utf-8")
-            .replace(run_name_str, "RUN")
+            _normalize_output_path(
+                result_obj.evidence_paths["html_report"].read_text(
+                    encoding="utf-8"
+                ),
+                output_path_obj,
+            )
         )
 
     assert documents_list[0] == documents_list[1]
+
+
+def _normalize_output_path(
+    document_text: str,
+    output_path_obj: Path,
+) -> str:
+    """Replace one run's output directory with a stable placeholder.
+
+    Args:
+        document_text: Rendered report.
+        output_path_obj: Directory that run wrote into.
+
+    Returns:
+        The document with that exact path normalized, in both the
+        native and POSIX spellings a command line might carry.
+    """
+
+    for path_text in (str(output_path_obj), output_path_obj.as_posix()):
+        document_text = document_text.replace(path_text, "OUTPUT_DIR")
+    return document_text
 
 
 def test_report_can_be_disabled(tmp_path: Path) -> None:

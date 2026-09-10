@@ -161,6 +161,48 @@ jobs:
           test "${VV_EXIT_CODE}" = "0"
           test "${VV_FAILED}" = "0"
 
+      - name: Verify reviewed targets
+        id: targets
+        uses: ./
+        with:
+          reference: examples/media/video_raw.mp4
+          candidate: examples/media/video_blur_partial.mp4
+          targets: examples/targets/demo_targets.csv
+          requirement: .
+          options: --no-annotated-video
+          fail-on-gap: "false"
+          upload-evidence: "false"
+
+      - name: Confirm the target contract
+        env:
+          VV_STATUS: ${{ steps.targets.outputs.status }}
+          VV_COVERAGE: ${{ steps.targets.outputs.target-coverage-percent }}
+          VV_UNCOVERED: >-
+            ${{ steps.targets.outputs.uncovered-target-frame-count }}
+          VV_COUNT: ${{ steps.targets.outputs.uncovered-target-count }}
+          VV_IDS: ${{ steps.targets.outputs.uncovered-target-ids }}
+        run: |
+          test "${VV_STATUS}" = "FAIL"
+          test "${VV_COVERAGE}" = "80.0"
+          test "${VV_UNCOVERED}" = "3"
+          test "${VV_COUNT}" = "1"
+          test "${VV_IDS}" = "PLATE_A"
+
+      - name: Confirm a target the media cannot contain is refused
+        shell: bash
+        run: |
+          printf 'frame_number,target_id,x1,y1,x2,y2\n' > ghost.csv
+          printf '99,PLATE_X,100,100,200,200\n' >> ghost.csv
+          set +e
+          visual-verifier video \
+            --reference examples/media/video_raw.mp4 \
+            --candidate examples/media/video_blur.mp4 \
+            --targets ghost.csv --quiet
+          exit_code=$?
+          set -e
+          # A target nobody can evaluate must stop the run, never pass it.
+          test "${exit_code}" = "1"
+
   windows-regression:
     name: Windows regression
     runs-on: windows-latest

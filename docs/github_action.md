@@ -20,7 +20,7 @@ silently skips a frame cannot merge.
 ```text
 ❌ Visual Verifier — FAIL
 
-3 processing gaps found in 15 frames.
+3 of 15 frames failed. Cause: no accepted processing.
 
 | Measurement         | Value                      |
 | Policy              | generic_change_every_frame |
@@ -51,6 +51,12 @@ repository. Pin a tag:
 uses: SAMtheROCKET/visual-verifier@v0.3.0
 ```
 
+Pinning the tag pins the verifier too. The `requirement` input defaults
+to the exact package version each action tag was released with, so
+`@v0.3.0` installs `visual-verifier==0.3.0` and keeps installing it a
+year from now. Override `requirement` only when you deliberately want to
+test a different version.
+
 ## Inputs
 
 | Input | Default | Meaning |
@@ -60,8 +66,11 @@ uses: SAMtheROCKET/visual-verifier@v0.3.0
 | `mode` | `video` | `video` or `image` comparison |
 | `output` | `visual-verifier-evidence` | Evidence directory |
 | `options` | empty | Extra CLI options passed verbatim |
-| `requirement` | `visual-verifier` | Pip requirement to install |
+| `requirement` | `visual-verifier==0.3.0` | Pip requirement to install |
 | `python-version` | `3.12` | Empty uses the runner interpreter |
+| `targets` | empty | Reviewed target CSV of regions that must be anonymized |
+| `target-min-coverage` | `0.9` | Fraction of a target processing must cover |
+| `allow-uncovered-targets` | `false` | Record target coverage without gating |
 | `fail-on-gap` | `true` | Fail the job on unprotected frames |
 | `upload-evidence` | `true` | Upload the evidence as an artifact |
 | `artifact-name` | `visual-verifier-evidence` | Artifact name |
@@ -91,6 +100,10 @@ never needs an encoder, only the annotated evidence does.
 | `exit-code` | `0` passed, `1` incomplete, `2` failed |
 | `failed-frame-count` | Number of unprotected frames |
 | `processing-coverage-percent` | Percentage of frames with change |
+| `target-coverage-percent` | Percentage of target frames covered |
+| `uncovered-target-frame-count` | Target frames left uncovered |
+| `uncovered-target-count` | Distinct targets missed at least once |
+| `uncovered-target-ids` | Space-separated identifiers of those targets |
 | `evidence-path` | Directory holding the evidence set |
 | `summary-path` | Path to the generated `summary.json` |
 
@@ -149,17 +162,58 @@ request gets one current result rather than a column of stale ones.
     candidate: build/redacted.png
 ```
 
+## Verifying reviewed targets
+
+Pass a target file and the check stops asking whether *anything* changed
+and starts asking whether the *required region* changed:
+
+```yaml
+- name: Verify anonymization coverage
+  id: verify
+  uses: SAMtheROCKET/visual-verifier@v0.3.0
+  with:
+    reference: fixtures/source.mp4
+    candidate: build/anonymized.mp4
+    targets: reviewed-plates.csv
+    target-min-coverage: "0.90"
+```
+
+A frame where two of three plates were blurred passes the generic check
+and fails this one. The job summary then carries a `Required targets`
+table naming which target was missed and where.
+
+Target outputs let a workflow act on the detail:
+
+```yaml
+- name: Open a ticket for each missed target
+  if: steps.verify.outputs.uncovered-target-count != '0'
+  env:
+    VV_IDS: ${{ steps.verify.outputs.uncovered-target-ids }}
+  run: echo "Uncovered targets: $VV_IDS"
+```
+
+A target file the media cannot contain — a frame number past the end of
+the video, or a box extending outside the frame — fails the step with
+`TARGET_VALIDATION_ERROR` rather than being quietly skipped. See
+[Target annotation](target_annotation.md).
+
 ## What the action does not change
 
 The action is a convenience over the [exit-code contract](ci.md), not a
 replacement for it. It runs the same command you would run yourself, and
-a `PASS` carries the same meaning and the same limits:
+a `PASS` carries the same meaning and the same limits.
+
+Without targets:
 
 > A `PASS` means accepted visual change was detected in every checked
 > frame under the configured thresholds. It does not prove that a
 > particular required object was transformed.
 
-Target-aware verification is [V5.3](target_annotation.md).
+With targets:
+
+> A `PASS` means every reviewed target was covered by accepted
+> processing in every frame it was declared on. Coverage is geometric:
+> it does not prove the region became unreadable to a human.
 
 ## How it is tested
 

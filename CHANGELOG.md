@@ -63,6 +63,60 @@ from 79% to 100% recall with no false alarms.
 - 58 target regressions across `tests/test_targets.py` and
   `tests/test_target_verification.py`, including one asserting that
   supplying no targets leaves every previous result identical
+- `targets/validation.py`, which checks every target against the
+  reference media before a frame is read and again after the run, and
+  `tests/test_target_media_validation.py` covering it
+- First-class `targets`, `target-min-coverage`, and
+  `allow-uncovered-targets` inputs on the GitHub Action, plus
+  `target-coverage-percent`, `uncovered-target-frame-count`,
+  `uncovered-target-count`, and `uncovered-target-ids` outputs
+- A `Required targets` section in the GitHub job summary, and target
+  coverage rows in its measurement table
+- Target-aware HTML evidence: a target coverage tile, a required-target
+  table, the declared target box drawn over each before/after
+  comparison, and a per-frame reason naming which of the two failure
+  modes applied
+- Reviewed targets in the `GitHub Action self-test` job, including a
+  check that a target the media cannot contain fails the run
+
+### Fixed
+
+- **A target outside the media could produce a false `PASS`.** A target
+  declaring a frame the video does not have parsed correctly and then
+  vanished: the frame loop never visited it, no coverage was measured,
+  and a run that should have failed reported `PASS` with zero targets.
+  Verification that silently skips a declared requirement is not
+  verification, so both this and an out-of-bounds box now raise
+  `TARGET_VALIDATION_ERROR` before any frame is read. A second check
+  after the run catches a target that fell out anyway, which media
+  metadata disagreeing with a decoder can still cause
+- **`frames_without_processing` counted target failures.** It was
+  derived from every failing frame, so a run where all 15 frames were
+  processed but a target was missed reported 15 frames with processing
+  and 15 without. Unprocessed frames, target-failed frames, and failed
+  frames are now three separate sets, and the measurement uses the
+  first
+- **A frame could lose one of its two failure reasons.** Target-failed
+  frames were removed from the unprocessed list, so a frame with no
+  processing *and* an uncovered target reported only
+  `UNCOVERED_TARGETS`. Both codes are now reported independently, which
+  is the distinction target-aware verification exists to make
+- **The HTML report described every failing frame as "no processing
+  detected"**, including frames where processing was detected and only
+  the required region was missed, and carried the generic-policy caveat
+  on target-aware runs
+- **The action's default requirement was unpinned.** `@v0.3.0` could
+  install any later release, defeating the point of pinning the tag. It
+  now defaults to `visual-verifier==0.3.0`
+- A determinism test replaced the bare words `first` and `second`
+  anywhere in the report, so a repository path containing either word
+  made a correct implementation look nondeterministic. It now
+  normalizes only the exact output directories that differ
+- `pyproject.toml` pointed PyPI at the `docs/` directory rather than the
+  published documentation site
+- The benchmark's capability table claimed the target-aware row needed
+  no tuning, when it reaches 100% only with a raised severity floor. The
+  column now states each method's operating point instead
 
 ### Changed
 
@@ -79,9 +133,15 @@ from 79% to 100% recall with no false alarms.
 
 ## [0.2.0] - 2026-09-10
 
-First release published to PyPI, and the first with documentation
-assets generated from real verification runs. The trove classifier
-stays `Pre-Alpha`: report schemas may still change before V6.0.
+Completed but never tagged or published. `v0.2.0` does not exist on the
+remote, so this section records the work rather than a release; `0.3.0`
+is the first version published to PyPI. It is kept as its own entry
+because the work is a distinct milestone, and rewriting it into `0.3.0`
+would obscure what changed when.
+
+The first version with documentation assets generated from real
+verification runs, and the one that advanced the trove classifier from
+`Pre-Alpha` to `Alpha`. Report schemas may still change before V6.0.
 
 ### Added
 

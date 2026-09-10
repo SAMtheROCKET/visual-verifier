@@ -67,13 +67,17 @@ which a human had to produce. It measures what the
 [target-aware workflow](target_annotation.md) buys, not a cleverer
 metric.
 
-| Method | Localizes frame | Localizes region | Temporal evidence | Needs tuning |
-| --- | :-: | :-: | :-: | :-: |
-| Visual Verifier + targets | Yes | Yes | Yes | No |
-| Visual Verifier | Yes | Yes | Yes | No |
-| Mean pixel difference | Yes | No | No | Yes |
-| PSNR threshold | Yes | No | No | Yes |
-| SSIM threshold | Yes | No | No | Yes |
+| Method | Localizes frame | Localizes region | Temporal evidence | Operating point |
+| --- | :-: | :-: | :-: | --- |
+| Visual Verifier + targets | Yes | Yes | Yes | Reviewed targets, `--min-severity 50` |
+| Visual Verifier | Yes | Yes | Yes | Shipped defaults |
+| Mean pixel difference | Yes | No | No | Threshold tuned on calibration |
+| PSNR threshold | Yes | No | No | Threshold tuned on calibration |
+| SSIM threshold | Yes | No | No | Threshold tuned on calibration |
+
+The operating point is stated rather than reduced to a yes-or-no "needs
+tuning" column, because the 100% row reaches that number only with a
+raised severity floor. Calling it untuned would be untrue.
 
 ## Where the global metrics collapse
 
@@ -103,8 +107,9 @@ longer separates anything.
 
 Visual Verifier measures change **region by region**, so a compressed
 frame and a noisy frame are still frames in which no region changed
-enough to count as processing. That is why the bottom four rows read
-100% against three zeros.
+enough to count as processing. That is why the four nuisance-change
+families — `offset_blur`, `compressed`, `compressed_small_target`, and
+`sensor_noise` — read 100% against three zeros.
 
 ## The semantic gap, and what closes it
 

@@ -94,8 +94,8 @@ def _render_capability_table(run_obj: BenchmarkRun) -> str:
 
     lines_list = [
         "| Method | Localizes frame | Localizes region | "
-        "Temporal evidence | Needs tuning |",
-        "| --- | :-: | :-: | :-: | :-: |",
+        "Temporal evidence | Operating point |",
+        "| --- | :-: | :-: | :-: | --- |",
     ]
     for method_obj in run_obj.method_results_list:
         capabilities_obj = method_obj.capabilities_obj
@@ -104,8 +104,13 @@ def _render_capability_table(run_obj: BenchmarkRun) -> str:
             f"| {_yes_no(capabilities_obj.localizes_frame_bool)} "
             f"| {_yes_no(capabilities_obj.localizes_region_bool)} "
             f"| {_yes_no(capabilities_obj.temporal_evidence_bool)} "
-            f"| {_yes_no(capabilities_obj.needs_tuning_bool)} |"
+            f"| {method_obj.tuning_note_str} |"
         )
+    lines_list.append(
+        "\n_Operating point_ is stated rather than reduced to a yes or "
+        "no, because the target row reaches 100% only with a raised "
+        "severity floor. Calling that untuned would be untrue."
+    )
     return "\n".join(lines_list)
 
 

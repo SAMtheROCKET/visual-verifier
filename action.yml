@@ -31,16 +31,38 @@ inputs:
     default: ""
   requirement:
     description: >-
-      Pip requirement installed before the run. Pin it, for example
-      `visual-verifier==0.2.0`, so a new release cannot change a result.
+      Pip requirement installed before the run. It defaults to the
+      exact version this action tag was released with, so pinning
+      the action pins the verifier too. Override it only when you
+      deliberately want a different version.
     required: false
-    default: visual-verifier
+    default: visual-verifier==0.3.0
   python-version:
     description: >-
       Python version to set up. Set to an empty string to use the
       interpreter already present on the runner.
     required: false
     default: "3.12"
+  targets:
+    description: >-
+      Reviewed target CSV declaring the regions that must be
+      anonymized. Supplying it changes the question from whether
+      anything changed to whether the required region changed, so
+      it can change the verdict.
+    required: false
+    default: ""
+  target-min-coverage:
+    description: >-
+      Fraction of a target that accepted processing must cover.
+      Applies only when `targets` is set.
+    required: false
+    default: "0.9"
+  allow-uncovered-targets:
+    description: >-
+      Record target coverage as evidence without letting an
+      uncovered target fail the job.
+    required: false
+    default: "false"
   fail-on-gap:
     description: >-
       Fail the job when verification completes and reports unprotected
@@ -79,6 +101,18 @@ outputs:
   processing-coverage-percent:
     description: Percentage of checked frames containing accepted change.
     value: ${{ steps.verify.outputs.processing-coverage-percent }}
+  target-coverage-percent:
+    description: Percentage of target frames covered, if any.
+    value: ${{ steps.verify.outputs.target-coverage-percent }}
+  uncovered-target-frame-count:
+    description: Target frames left uncovered.
+    value: ${{ steps.verify.outputs.uncovered-target-frame-count }}
+  uncovered-target-count:
+    description: Distinct targets uncovered in at least one frame.
+    value: ${{ steps.verify.outputs.uncovered-target-count }}
+  uncovered-target-ids:
+    description: Space-separated identifiers of uncovered targets.
+    value: ${{ steps.verify.outputs.uncovered-target-ids }}
   evidence-path:
     description: Directory holding the generated evidence set.
     value: ${{ steps.verify.outputs.evidence-path }}
@@ -112,7 +146,21 @@ runs:
         VV_CANDIDATE: ${{ inputs.candidate }}
         VV_OUTPUT: ${{ inputs.output }}
         VV_OPTIONS: ${{ inputs.options }}
+        VV_TARGETS: ${{ inputs.targets }}
+        VV_TARGET_MIN_COVERAGE: ${{ inputs.target-min-coverage }}
+        VV_ALLOW_UNCOVERED: ${{ inputs.allow-uncovered-targets }}
       run: |
+        target_arguments=()
+        if [ -n "${VV_TARGETS}" ]; then
+          target_arguments+=(--targets "${VV_TARGETS}")
+          target_arguments+=(
+            --target-min-coverage "${VV_TARGET_MIN_COVERAGE}"
+          )
+          if [ "${VV_ALLOW_UNCOVERED}" = "true" ]; then
+            target_arguments+=(--allow-uncovered-targets)
+          fi
+        fi
+
         set +e
         # Word splitting is intended: VV_OPTIONS carries extra flags.
         # shellcheck disable=SC2086
@@ -120,6 +168,7 @@ runs:
           --reference "${VV_REFERENCE}" \
           --candidate "${VV_CANDIDATE}" \
           --output "${VV_OUTPUT}" \
+          "${target_arguments[@]}" \
           ${VV_OPTIONS}
         exit_code=$?
         set -e
@@ -136,6 +185,10 @@ runs:
             echo "status=ERROR"
             echo "failed-frame-count="
             echo "processing-coverage-percent="
+            echo "target-coverage-percent="
+            echo "uncovered-target-frame-count="
+            echo "uncovered-target-count="
+            echo "uncovered-target-ids="
           } >> "${GITHUB_OUTPUT}"
           exit 0
         fi
@@ -153,6 +206,32 @@ runs:
         print(f"status={summary.get('status', 'ERROR')}")
         print(f"failed-frame-count={len(summary.get('failed_frames') or [])}")
         print(f"processing-coverage-percent={coverage}")
+
+        targets = measurements.get("targets") or {}
+        summaries = targets.get("target_summaries") or []
+        uncovered = sorted(
+            str(entry.get("target_id", ""))
+            for entry in summaries
+            if entry.get("uncovered_frames")
+        )
+        target_coverage = (
+            targets.get("target_coverage_percent", "")
+            if targets
+            else ""
+        )
+        uncovered_frames = (
+            targets.get("uncovered_target_frame_count", "")
+            if targets
+            else ""
+        )
+        print(f"target-coverage-percent={target_coverage}")
+        print(
+            f"uncovered-target-frame-count={uncovered_frames}"
+        )
+        print(
+            f"uncovered-target-count={len(uncovered) if targets else ""}"
+        )
+        print(f"uncovered-target-ids={' '.join(uncovered)}")
         PYTHON
 
     - name: Render summary

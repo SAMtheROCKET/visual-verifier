@@ -29,6 +29,7 @@ from visual_verifier.models import (
     FrameVerification,
     VerificationResult,
 )
+from visual_verifier.targets.models import TargetCoverage
 from visual_verifier.type_aliases import PathInput
 
 HTML_REPORT_FILENAME_STR = "index.html"
@@ -63,6 +64,7 @@ def write_html_report(
     frame_results_sequence: Sequence[FrameVerification],
     thumbnails_sequence: Sequence[FrameThumbnail],
     output_path_input: PathInput,
+    target_coverages_sequence: Sequence[TargetCoverage] = (),
 ) -> Path:
     """Write one self-contained HTML evidence report.
 
@@ -71,6 +73,8 @@ def write_html_report(
         frame_results_sequence: Per-frame verification evidence.
         thumbnails_sequence: Encoded evidence for failing frames.
         output_path_input: Destination path for the HTML document.
+        target_coverages_sequence: Measured target coverage, empty when
+            the run supplied no targets.
 
     Returns:
         Path to the written report.
@@ -84,6 +88,7 @@ def write_html_report(
         result_obj,
         frame_results_sequence,
         thumbnails_sequence,
+        target_coverages_sequence,
     )
     try:
         output_path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -103,6 +108,7 @@ def render_html_report(
     result_obj: VerificationResult,
     frame_results_sequence: Sequence[FrameVerification],
     thumbnails_sequence: Sequence[FrameThumbnail],
+    target_coverages_sequence: Sequence[TargetCoverage] = (),
 ) -> str:
     """Render the complete evidence document as HTML text.
 
@@ -110,16 +116,30 @@ def render_html_report(
         result_obj: Completed verification result.
         frame_results_sequence: Per-frame verification evidence.
         thumbnails_sequence: Encoded evidence for failing frames.
+        target_coverages_sequence: Measured target coverage, empty
+            when the run supplied no targets.
 
     Returns:
         Deterministic, self-contained HTML document.
     """
 
+    coverages_by_frame_dict = _group_coverages(target_coverages_sequence)
+    unprocessed_frames_frozenset = frozenset(
+        frame_result_obj.frame_number
+        for frame_result_obj in frame_results_sequence
+        if frame_result_obj.accepted_region_count == 0
+    )
     sections_list = [
         _render_header(result_obj),
         _render_statistics(result_obj, frame_results_sequence),
         _render_timeline(frame_results_sequence, result_obj),
-        _render_evidence_cards(thumbnails_sequence),
+        _render_targets(result_obj),
+        _render_evidence_cards(
+            thumbnails_sequence,
+            coverages_by_frame_dict,
+            unprocessed_frames_frozenset,
+            result_obj,
+        ),
         _render_tracks(result_obj),
         _render_footer(result_obj),
     ]
@@ -166,6 +186,20 @@ def _render_statistics(
         ),
         ("Frames unprotected", str(len(result_obj.failed_frames))),
     ]
+    targets_mapping = measurements_mapping.get("targets")
+    if isinstance(targets_mapping, Mapping):
+        tiles_list.append(
+            (
+                "Target coverage",
+                f"{targets_mapping.get('target_coverage_percent', 0)}%",
+            )
+        )
+        tiles_list.append(
+            (
+                "Targets uncovered",
+                str(targets_mapping.get("uncovered_target_frame_count", 0)),
+            )
+        )
     tracking_mapping = measurements_mapping.get("tracking")
     if isinstance(tracking_mapping, Mapping):
         tiles_list.append(
@@ -289,15 +323,35 @@ def _timeline_cell_label(
 
 def _render_evidence_cards(
     thumbnails_sequence: Sequence[FrameThumbnail],
+    coverages_by_frame_dict: dict[int, list[TargetCoverage]],
+    unprocessed_frames_frozenset: frozenset[int],
+    result_obj: VerificationResult,
 ) -> str:
-    """Render a before/after comparison for each captured failing frame."""
+    """Render a before/after comparison for each captured failing frame.
+
+    Args:
+        thumbnails_sequence: Encoded evidence for failing frames.
+        coverages_by_frame_dict: Target coverage indexed by frame.
+        unprocessed_frames_frozenset: Frames with no accepted region.
+        result_obj: Completed verification result.
+
+    Returns:
+        The evidence section, or an empty string when nothing was
+        captured.
+    """
 
     if not thumbnails_sequence:
         return ""
     shown_thumbnails_list = list(thumbnails_sequence)[:MAX_EVIDENCE_CARDS_INT]
     omitted_count_int = len(thumbnails_sequence) - len(shown_thumbnails_list)
+    frame_size_tuple = _reference_frame_size(result_obj)
     cards_list = [
-        _render_evidence_card(thumbnail_obj)
+        _render_evidence_card(
+            thumbnail_obj,
+            coverages_by_frame_dict.get(thumbnail_obj.frame_number, []),
+            thumbnail_obj.frame_number in unprocessed_frames_frozenset,
+            frame_size_tuple,
+        )
         for thumbnail_obj in shown_thumbnails_list
     ]
     note_text = ""
@@ -307,15 +361,35 @@ def _render_evidence_cards(
             "frames are listed in <code>frame_report.csv</code>.</p>"
         )
     return (
-        '<section class="panel"><h2>Unprotected frames</h2>'
+        '<section class="panel"><h2>Failing frames</h2>'
         '<p class="note">Drag each slider to wipe between the original and '
         "the processed candidate.</p>"
         f"{''.join(cards_list)}{note_text}</section>"
     )
 
 
-def _render_evidence_card(thumbnail_obj: FrameThumbnail) -> str:
-    """Render one before/after wipe comparison for a failing frame."""
+def _render_evidence_card(
+    thumbnail_obj: FrameThumbnail,
+    coverages_list: list[TargetCoverage],
+    is_unprocessed_bool: bool,
+    frame_size_tuple: tuple[int, int],
+) -> str:
+    """Render one before/after wipe comparison for a failing frame.
+
+    The caption says which of the two failure modes applied. A frame
+    labelled "no processing detected" when processing was in fact
+    detected elsewhere would mislead the reviewer this report exists
+    to inform.
+
+    Args:
+        thumbnail_obj: Captured frame evidence.
+        coverages_list: Target coverage measured in this frame.
+        is_unprocessed_bool: Whether the frame had no accepted region.
+        frame_size_tuple: Reference frame width and height.
+
+    Returns:
+        The rendered card.
+    """
 
     frame_number_int = thumbnail_obj.frame_number
     reference_uri = _data_uri(thumbnail_obj.reference_jpeg_bytes)
@@ -323,7 +397,7 @@ def _render_evidence_card(thumbnail_obj: FrameThumbnail) -> str:
     return (
         f'<figure class="card" id="frame-{frame_number_int}">'
         f"<figcaption>Frame {frame_number_int}"
-        '<span class="pill fail">no processing detected</span>'
+        f"{_render_card_pills(is_unprocessed_bool, coverages_list)}"
         "</figcaption>"
         '<div class="wipe">'
         f'<img class="under" src="{candidate_uri}" alt="Processed '
@@ -332,10 +406,255 @@ def _render_evidence_card(thumbnail_obj: FrameThumbnail) -> str:
         f'reference, frame {frame_number_int}"></div>'
         '<input class="slider" type="range" min="0" max="100" value="50" '
         f'aria-label="Compare frame {frame_number_int}">'
+        f"{_render_target_overlays(coverages_list, frame_size_tuple)}"
         '<span class="tag left">original</span>'
         '<span class="tag right">candidate</span>'
-        "</div></figure>"
+        "</div>"
+        f"{_render_card_reason(is_unprocessed_bool, coverages_list)}"
+        "</figure>"
     )
+
+
+def _group_coverages(
+    target_coverages_sequence: Sequence[TargetCoverage],
+) -> dict[int, list[TargetCoverage]]:
+    """Index measured target coverage by frame number.
+
+    Args:
+        target_coverages_sequence: Every measured coverage record.
+
+    Returns:
+        Mapping of frame number to that frame's coverage records.
+    """
+
+    grouped_dict: dict[int, list[TargetCoverage]] = {}
+    for coverage_obj in target_coverages_sequence:
+        grouped_dict.setdefault(coverage_obj.target.frame_number, []).append(
+            coverage_obj
+        )
+    return grouped_dict
+
+
+def _reference_frame_size(
+    result_obj: VerificationResult,
+) -> tuple[int, int]:
+    """Return the reference frame width and height.
+
+    Args:
+        result_obj: Completed verification result.
+
+    Returns:
+        Width and height in pixels, or zeroes when unknown.
+    """
+
+    metadata_mapping = result_obj.measurements.get("reference_metadata")
+    if not isinstance(metadata_mapping, Mapping):
+        return (0, 0)
+    width_value = metadata_mapping.get("width", 0)
+    height_value = metadata_mapping.get("height", 0)
+    if not isinstance(width_value, int) or not isinstance(height_value, int):
+        return (0, 0)
+    return (width_value, height_value)
+
+
+def _render_targets(result_obj: VerificationResult) -> str:
+    """Render the per-target coverage table when targets were supplied.
+
+    Args:
+        result_obj: Completed verification result.
+
+    Returns:
+        The section, or an empty string when no targets were used.
+    """
+
+    targets_mapping = result_obj.measurements.get("targets")
+    if not isinstance(targets_mapping, Mapping):
+        return ""
+    summaries_object = targets_mapping.get("target_summaries")
+    if not isinstance(summaries_object, Sequence) or not summaries_object:
+        return ""
+
+    rows_list = [
+        _render_target_row(summary_object)
+        for summary_object in summaries_object
+        if isinstance(summary_object, Mapping)
+    ]
+    return (
+        '<section class="panel"><h2>Required targets</h2>'
+        '<p class="note">A target is covered when accepted processing '
+        "overlaps at least the configured fraction of its area. "
+        "Interpolated boxes were derived between reviewed frames rather "
+        "than drawn by a reviewer.</p>"
+        '<table class="grid"><thead><tr><th>Target</th><th>Type</th>'
+        "<th>Frames</th><th>Covered</th><th>Mean coverage</th>"
+        "<th>Interpolated</th><th>Result</th></tr></thead>"
+        f"<tbody>{''.join(rows_list)}</tbody></table></section>"
+    )
+
+
+def _render_target_row(summary_mapping: Mapping[str, object]) -> str:
+    """Render one row of the required-target table.
+
+    Args:
+        summary_mapping: One serialized target summary.
+
+    Returns:
+        The rendered table row.
+    """
+
+    uncovered_object = summary_mapping.get("uncovered_frames")
+    uncovered_count_int = (
+        len(uncovered_object) if isinstance(uncovered_object, Sequence) else 0
+    )
+    required_bool = bool(summary_mapping.get("required", True))
+    passed_bool = uncovered_count_int == 0 or not required_bool
+    verdict_text = "PASS" if passed_bool else "FAIL"
+    verdict_class_text = "pass" if passed_bool else "fail"
+    covered_text = (
+        f"{summary_mapping.get('covered_frame_count', 0)}"
+        f" / {summary_mapping.get('frame_count', 0)}"
+    )
+    return (
+        "<tr>"
+        f"<td><code>{_cell(summary_mapping, 'target_id')}</code></td>"
+        f"<td>{_cell(summary_mapping, 'target_type')}</td>"
+        f"<td>{_cell(summary_mapping, 'first_frame')}"
+        f"-{_cell(summary_mapping, 'last_frame')}</td>"
+        f"<td>{html.escape(covered_text)}</td>"
+        f"<td>{_format_ratio(summary_mapping, 'mean_covered_ratio')}</td>"
+        f"<td>{_cell(summary_mapping, 'interpolated_frame_count')}</td>"
+        f'<td><span class="pill {verdict_class_text}">{verdict_text}'
+        "</span></td>"
+        "</tr>"
+    )
+
+
+def _format_ratio(
+    mapping_obj: Mapping[str, object],
+    key_str: str,
+) -> str:
+    """Return one ratio field rendered as a percentage.
+
+    Args:
+        mapping_obj: Mapping to read from.
+        key_str: Field to render.
+
+    Returns:
+        A formatted percentage, or a dash when the value is not numeric.
+    """
+
+    value_object = mapping_obj.get(key_str, 0)
+    if not isinstance(value_object, int | float):
+        return "-"
+    return html.escape(f"{float(value_object):.0%}")
+
+
+def _render_card_pills(
+    is_unprocessed_bool: bool,
+    coverages_list: list[TargetCoverage],
+) -> str:
+    """Render the status pills for one evidence card.
+
+    Args:
+        is_unprocessed_bool: Whether the frame had no accepted region.
+        coverages_list: Target coverage measured in this frame.
+
+    Returns:
+        The rendered pills.
+    """
+
+    pills_list: list[str] = []
+    if is_unprocessed_bool:
+        pills_list.append(
+            '<span class="pill fail">no processing detected</span>'
+        )
+    elif coverages_list:
+        pills_list.append('<span class="pill pass">processing detected</span>')
+    pills_list.extend(
+        f'<span class="pill fail">'
+        f"{html.escape(coverage_obj.target.target_id)}"
+        f" {coverage_obj.covered_ratio:.0%} covered</span>"
+        for coverage_obj in coverages_list
+        if coverage_obj.is_failure
+    )
+    return "".join(pills_list)
+
+
+def _render_card_reason(
+    is_unprocessed_bool: bool,
+    coverages_list: list[TargetCoverage],
+) -> str:
+    """Render the plain-language reason this frame failed.
+
+    Args:
+        is_unprocessed_bool: Whether the frame had no accepted region.
+        coverages_list: Target coverage measured in this frame.
+
+    Returns:
+        The rendered reason line, or an empty string.
+    """
+
+    failed_list = [
+        coverage_obj
+        for coverage_obj in coverages_list
+        if coverage_obj.is_failure
+    ]
+    reasons_list: list[str] = []
+    if is_unprocessed_bool:
+        reasons_list.append(
+            "No accepted processing was detected anywhere in this frame."
+        )
+    if failed_list:
+        names_text = ", ".join(
+            sorted(
+                coverage_obj.target.target_id for coverage_obj in failed_list
+            )
+        )
+        noun_text = "target" if len(failed_list) == 1 else "targets"
+        verb_text = "was" if len(failed_list) == 1 else "were"
+        reasons_list.append(
+            f"Required {noun_text} {names_text} {verb_text} not covered."
+        )
+    if not reasons_list:
+        return ""
+    return f'<p class="note">{html.escape(" ".join(reasons_list))}</p>'
+
+
+def _render_target_overlays(
+    coverages_list: list[TargetCoverage],
+    frame_size_tuple: tuple[int, int],
+) -> str:
+    """Draw each declared target box over the comparison image.
+
+    Boxes are positioned as percentages of the frame, so they stay
+    correct whatever size the thumbnail was encoded at.
+
+    Args:
+        coverages_list: Target coverage measured in this frame.
+        frame_size_tuple: Reference frame width and height.
+
+    Returns:
+        The rendered overlay elements.
+    """
+
+    width_int, height_int = frame_size_tuple
+    if width_int <= 0 or height_int <= 0 or not coverages_list:
+        return ""
+
+    overlays_list: list[str] = []
+    for coverage_obj in coverages_list:
+        box_obj = coverage_obj.target.box
+        state_text = "covered" if coverage_obj.covered else "uncovered"
+        overlays_list.append(
+            f'<span class="target {state_text}" style="'
+            f"left:{box_obj.x1 / width_int:.4%};"
+            f"top:{box_obj.y1 / height_int:.4%};"
+            f"width:{box_obj.width / width_int:.4%};"
+            f'height:{box_obj.height / height_int:.4%}">'
+            f"<em>{html.escape(coverage_obj.target.target_id)}</em>"
+            "</span>"
+        )
+    return "".join(overlays_list)
 
 
 def _render_tracks(result_obj: VerificationResult) -> str:
@@ -411,12 +730,39 @@ def _render_footer(result_obj: VerificationResult) -> str:
         f"<p>Failed frames: <code>{html.escape(failed_frames_text)}</code>. "
         "Machine-readable evidence is in <code>summary.json</code> and the "
         "CSV reports beside this file.</p>"
-        '<p class="note">A <strong>PASS</strong> means accepted visual '
-        "change was detected in every checked frame under the configured "
-        "thresholds. It is not a certificate of anonymization, and it does "
-        "not prove that a particular required object was transformed. "
-        "This report was generated locally; nothing was uploaded.</p>"
+        f'<p class="note">{_scope_note(result_obj)} This report was '
+        "generated locally; nothing was uploaded.</p>"
         "</section>"
+    )
+
+
+def _scope_note(result_obj: VerificationResult) -> str:
+    """Return the caveat matching the policy this run actually applied.
+
+    A target-aware run makes a stronger claim than a generic one, so
+    repeating the generic caveat would understate the result while a
+    generic run repeating the target caveat would overstate it.
+
+    Args:
+        result_obj: Completed verification result.
+
+    Returns:
+        The escaped caveat sentence.
+    """
+
+    if isinstance(result_obj.measurements.get("targets"), Mapping):
+        return html.escape(
+            "A PASS means every reviewed target was covered by accepted "
+            "processing in every frame it was declared on, under the "
+            "configured coverage threshold. It is not a certificate of "
+            "anonymization: coverage is geometric, so it does not prove "
+            "the region became unreadable to a human."
+        )
+    return html.escape(
+        "A PASS means accepted visual change was detected in every "
+        "checked frame under the configured thresholds. It is not a "
+        "certificate of anonymization, and it does not prove that a "
+        "particular required object was transformed."
     )
 
 
@@ -466,6 +812,14 @@ figcaption { font-weight: 620; margin-bottom: 8px; }
 .pill { display: inline-block; margin-left: 10px; padding: 2px 9px;
   border-radius: 999px; font-size: 11.5px; font-weight: 600; color: #fff; }
 .pill.fail { background: #c0392b; }
+.pill.pass { background: #1e8449; }
+.target { position: absolute; z-index: 3; pointer-events: none;
+  border: 2px solid #f1c40f; box-sizing: border-box; }
+.target.uncovered { border-color: #ff4d4d; }
+.target em { position: absolute; left: 0; bottom: 100%; font-style: normal;
+  font-size: 10.5px; line-height: 1.4; padding: 1px 5px; color: #111;
+  background: #f1c40f; white-space: nowrap; border-radius: 3px 3px 0 0; }
+.target.uncovered em { background: #ff4d4d; color: #fff; }
 .wipe { position: relative; overflow: hidden; border-radius: 8px;
   background: #000; line-height: 0; }
 .wipe img { width: 100%; display: block; }

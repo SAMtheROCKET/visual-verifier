@@ -54,8 +54,10 @@ clip, `FAIL` on frames 4, 8, and 12 against the partially blurred one.
 
 ## What is rejected
 
-The loader refuses a file rather than verifying part of it. Each error
-names the line to fix.
+Validation happens in two passes, and both refuse the run rather than
+verifying part of it.
+
+**The file itself.** Each error names the line to fix.
 
 - A missing required column
 - A frame number below 1
@@ -68,6 +70,39 @@ names the line to fix.
 That last one matters more than it looks. Treating an unreadable flag as
 `true` would be the safe-sounding choice and the wrong one: it would hide
 a typo that a reviewer needs to see.
+
+**The file against the media**, before any frame is read.
+
+- A frame number the media does not have
+- A box extending past the frame width or height
+
+This second pass exists because of a real defect. A target declaring
+frame 99 of a 15-frame video parses perfectly, and then the frame loop
+never visits it: no coverage is measured, and a run that should fail
+reports `PASS` with zero targets. **Verification that silently skips a
+declared requirement is not verification.** Both faults now raise
+`TARGET_VALIDATION_ERROR` and exit `1`, which the exit-code contract
+already means *could not complete*.
+
+```console
+$ visual-verifier video --reference raw.mp4 --candidate out.mp4 \
+      --targets plates.csv
+ERROR [TARGET_VALIDATION_ERROR]: Targets do not fit the reference media.
+  problem_count: 1
+  problems: ["target 'PLATE_X' names frame 99, but the reference media
+  has 15 frames"]
+  reference_frame_count: 15
+```
+
+Repeated faults are collapsed. One bad box declared on every frame is
+reported once, naming the frame span, rather than filling the error with
+identical lines.
+
+A third check runs *after* verification and confirms every declared
+target really was measured. Media metadata can disagree with what a
+decoder yields, so a target inside the declared frame count can still go
+unvisited. That is the last chance to notice before a verdict is
+returned, and it raises rather than returning one.
 
 ## Coverage
 
@@ -107,12 +142,26 @@ can always tell which boxes a human actually drew.
 | --- | --- | --- |
 | Policy | `generic_change_every_frame` | `target_coverage_every_frame` |
 | A frame fails when | no accepted region | no accepted region, **or** a required target is uncovered |
-| Failure code | `UNPROCESSED_FRAMES` | also `UNCOVERED_TARGETS` |
+| Failure codes | `UNPROCESSED_FRAMES` | also `UNCOVERED_TARGETS` |
 | Extra evidence | – | `target_report.csv`, `measurements.targets` |
 
-Both failure kinds are reported separately, so a reviewer can tell "this
-frame was skipped entirely" from "this frame was processed, but not
-where it mattered".
+The two failure kinds are reported **independently**, so a frame that
+was skipped entirely *and* left a target uncovered carries both codes:
+
+```text
+Frame 4
+├── UNPROCESSED_FRAMES   nothing was processed at all
+└── UNCOVERED_TARGETS    PLATE_A was left exposed
+
+Frame 7
+├── (processing detected elsewhere in the frame)
+└── UNCOVERED_TARGETS    PLATE_B was left exposed
+```
+
+That distinction is the point of supplying targets. `frames_without_processing`
+counts only the first kind, so a run where every frame was processed but
+a target was missed reports zero unprocessed frames, not one per
+failure.
 
 Supplying no targets changes nothing. A regression test asserts that
 every result produced before this feature is produced identically.

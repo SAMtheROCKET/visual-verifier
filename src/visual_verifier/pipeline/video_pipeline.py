@@ -53,6 +53,10 @@ from visual_verifier.targets.models import (
     TargetCoverage,
     TargetSummary,
 )
+from visual_verifier.targets.validation import (
+    confirm_every_target_was_evaluated,
+    validate_targets_against_media,
+)
 from visual_verifier.tracking.analysis import analyze_tracks
 from visual_verifier.tracking.models import (
     FrameTrackingResult,
@@ -86,6 +90,10 @@ class _VideoRunContext:
     reference_metadata_obj: MediaMetadata
     candidate_metadata_obj: MediaMetadata
     output_path_obj: Path | None
+    targets_tuple: tuple[Target, ...] = ()
+    targets_by_frame_dict: dict[int, tuple[Target, ...]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(slots=True)
@@ -106,6 +114,7 @@ class _VideoRunBuffers:
     failed_frame_thumbnails_list: list[FrameThumbnail] = field(
         default_factory=list
     )
+    unprocessed_frames_list: list[int] = field(default_factory=list)
     target_coverages_list: list[TargetCoverage] = field(default_factory=list)
     target_failed_frames_list: list[int] = field(default_factory=list)
     target_summaries_tuple: tuple[TargetSummary, ...] = ()
@@ -131,6 +140,8 @@ class _VideoRunBuffers:
                 frame_result_obj.rejected_regions,
             )
         )
+        if frame_result_obj.accepted_region_count == 0:
+            self.unprocessed_frames_list.append(frame_result_obj.frame_number)
         if frame_result_obj.failed:
             self.failed_frames_list.append(frame_result_obj.frame_number)
         if tracking_result_obj is not None:
@@ -154,9 +165,21 @@ class _VideoRunBuffers:
         if any(coverage_obj.is_failure for coverage_obj in coverages_tuple):
             self.target_failed_frames_list.append(frame_number_int)
 
-    def finalize_targets(self) -> None:
-        """Summarize target coverage once every frame has been read."""
+    def finalize_targets(self, targets_tuple: tuple[Target, ...]) -> None:
+        """Summarize target coverage once every frame has been read.
 
+        Args:
+            targets_tuple: Targets the run was supposed to evaluate.
+
+        Raises:
+            TargetValidationError: When a declared target was never
+                measured, which would otherwise return a verdict on a
+                requirement nobody checked.
+        """
+
+        confirm_every_target_was_evaluated(
+            targets_tuple, self.target_coverages_list
+        )
         self.target_summaries_tuple = summarize_targets(
             self.target_coverages_list
         )
@@ -254,12 +277,7 @@ class VideoVerificationPipeline:
         self._enable_tracking_bool = enable_tracking_bool
         self._tracking_config_obj = tracking_config_obj
         self._target_config_obj = target_config_obj
-        self._targets_tuple = _prepare_targets(
-            targets_tuple, target_config_obj
-        )
-        self._targets_by_frame_dict = group_targets_by_frame(
-            self._targets_tuple
-        )
+        self._declared_targets_tuple = targets_tuple
 
     def run(
         self,
@@ -273,6 +291,8 @@ class VideoVerificationPipeline:
             reference_path_input,
             candidate_path_input,
             output_dir_input,
+            self._declared_targets_tuple,
+            self._target_config_obj,
         )
         annotated_writer_obj = self._create_annotated_writer(
             run_context_obj.output_path_obj,
@@ -289,13 +309,13 @@ class VideoVerificationPipeline:
         if tracker_obj is not None:
             tracker_obj.finish(last_frame_number_int)
             run_buffers_obj.finalize_tracking(tracker_obj)
-        run_buffers_obj.finalize_targets()
+        run_buffers_obj.finalize_targets(run_context_obj.targets_tuple)
         result_obj = _build_result_from_context(
             run_context_obj,
             run_buffers_obj,
             self._enable_tracking_bool,
             self._tracking_config_obj,
-            bool(self._targets_tuple),
+            bool(run_context_obj.targets_tuple),
             self._target_config_obj,
         )
         return _write_optional_evidence(
@@ -377,7 +397,7 @@ class VideoVerificationPipeline:
             )
             frame_result_obj, coverages_tuple = self._evaluate_frame(
                 frame_number_int,
-                run_context_obj.reference_metadata_obj,
+                run_context_obj,
                 reference_frame_ndarray,
                 normalized_candidate_ndarray,
             )
@@ -405,7 +425,7 @@ class VideoVerificationPipeline:
     def _evaluate_frame(
         self,
         frame_number_int: int,
-        reference_metadata_obj: MediaMetadata,
+        run_context_obj: _VideoRunContext,
         reference_frame_ndarray: ImageArray,
         candidate_frame_ndarray: ImageArray,
     ) -> tuple[FrameVerification, tuple[TargetCoverage, ...]]:
@@ -413,7 +433,7 @@ class VideoVerificationPipeline:
 
         Args:
             frame_number_int: One-based frame number.
-            reference_metadata_obj: Reference media metadata.
+            run_context_obj: Resolved paths, metadata, and targets.
             reference_frame_ndarray: Original frame.
             candidate_frame_ndarray: Normalized candidate frame.
 
@@ -422,13 +442,14 @@ class VideoVerificationPipeline:
             empty when no targets were supplied.
         """
 
+        reference_metadata_obj = run_context_obj.reference_metadata_obj
         accepted_regions_tuple, rejected_regions_tuple = detect_regions(
             reference_frame_ndarray,
             candidate_frame_ndarray,
             self._detection_config_obj,
         )
         coverages_tuple = measure_frame_targets(
-            self._targets_by_frame_dict.get(frame_number_int, ()),
+            run_context_obj.targets_by_frame_dict.get(frame_number_int, ()),
             accepted_regions_tuple,
             min_covered_ratio=self._target_config_obj.min_covered_ratio,
         )
@@ -514,20 +535,29 @@ def verify_video_pipeline(
 def _prepare_targets(
     targets_tuple: tuple[Target, ...],
     target_config_obj: TargetConfig,
+    reference_metadata_obj: MediaMetadata,
 ) -> tuple[Target, ...]:
-    """Interpolate permitted target gaps before verification starts.
+    """Validate targets against the media, then fill permitted gaps.
+
+    Validation happens before any frame is read, so a target that cannot
+    exist stops the run instead of vanishing from it.
 
     Args:
         targets_tuple: Reviewed targets, which may be empty.
         target_config_obj: Configuration for this run.
+        reference_metadata_obj: Metadata the targets must fit.
 
     Returns:
         The targets to verify against, with interpolated boxes marked
         as such so no report can present one as reviewed.
+
+    Raises:
+        TargetValidationError: When a target does not fit the media.
     """
 
     if not targets_tuple:
         return ()
+    validate_targets_against_media(targets_tuple, reference_metadata_obj)
     if not target_config_obj.interpolate_missing_frames:
         return targets_tuple
     return interpolate_targets(
@@ -540,17 +570,39 @@ def _prepare_video_run_context(
     reference_path_input: PathInput,
     candidate_path_input: PathInput,
     output_dir_input: PathInput | None,
+    declared_targets_tuple: tuple[Target, ...] = (),
+    target_config_obj: TargetConfig = DEFAULT_TARGET_CONFIG,
 ) -> _VideoRunContext:
-    """Resolve paths and read metadata required for one run."""
+    """Resolve paths, read metadata, and prepare targets for one run.
+
+    Args:
+        reference_path_input: Reference media path.
+        candidate_path_input: Candidate media path.
+        output_dir_input: Evidence directory, or ``None``.
+        declared_targets_tuple: Reviewed targets, which may be empty.
+        target_config_obj: Target configuration for this run.
+
+    Returns:
+        The resolved run context.
+
+    Raises:
+        TargetValidationError: When a target does not fit the media.
+    """
 
     reference_path_obj = _resolve_video_path(reference_path_input)
     candidate_path_obj = _resolve_video_path(candidate_path_input)
+    reference_metadata_obj = read_video_metadata(reference_path_obj)
+    targets_tuple = _prepare_targets(
+        declared_targets_tuple, target_config_obj, reference_metadata_obj
+    )
     return _VideoRunContext(
         reference_path_obj=reference_path_obj,
         candidate_path_obj=candidate_path_obj,
-        reference_metadata_obj=read_video_metadata(reference_path_obj),
+        reference_metadata_obj=reference_metadata_obj,
         candidate_metadata_obj=read_video_metadata(candidate_path_obj),
         output_path_obj=_prepare_output_directory(output_dir_input),
+        targets_tuple=targets_tuple,
+        targets_by_frame_dict=group_targets_by_frame(targets_tuple),
     )
 
 
@@ -816,14 +868,7 @@ def _build_failures(
     if not failed_frames_tuple:
         return ()
 
-    target_failed_frozenset = frozenset(
-        run_buffers_obj.target_failed_frames_list
-    )
-    unprocessed_list = [
-        frame_int
-        for frame_int in failed_frames_tuple
-        if frame_int not in target_failed_frozenset
-    ]
+    unprocessed_list = sorted(set(run_buffers_obj.unprocessed_frames_list))
 
     failures_list: list[VerificationFailure] = []
     if unprocessed_list:
@@ -837,7 +882,7 @@ def _build_failures(
                 measurements={"failed_frames": unprocessed_list},
             )
         )
-    if target_failed_frozenset:
+    if run_buffers_obj.target_failed_frames_list:
         failures_list.append(_build_target_failure(run_buffers_obj))
     return tuple(failures_list)
 
@@ -896,7 +941,9 @@ def _build_measurements(
         "candidate_metadata": _metadata_to_dict(candidate_metadata_obj),
         "frames_checked": frames_checked_int,
         "frames_with_processing": processed_frames_int,
-        "frames_without_processing": len(run_buffers_obj.failed_frames_list),
+        "frames_without_processing": len(
+            run_buffers_obj.unprocessed_frames_list
+        ),
         "processing_coverage_percent": _calculate_processing_coverage(
             processed_frames_int,
             frames_checked_int,
@@ -1066,6 +1113,7 @@ def _write_optional_evidence(
             run_buffers_obj.frame_results_list,
             run_buffers_obj.failed_frame_thumbnails_list,
             evidence_paths_dict["html_report"],
+            run_buffers_obj.target_coverages_list,
         )
     return enriched_result_obj
 

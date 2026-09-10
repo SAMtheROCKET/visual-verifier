@@ -91,24 +91,23 @@ def test_passing_run_reports_every_frame() -> None:
 
 
 def test_failing_run_counts_the_gaps() -> None:
-    """Confirm a failing run names how many gaps were found."""
+    """Confirm a failing run names how many frames failed."""
 
     rendered_str = RENDERER_MODULE.render_summary(
         _build_summary("FAIL", [4, 8, 12])
     )
 
     assert "FAIL" in rendered_str
-    assert "**3 processing gaps found**" in rendered_str
+    assert "**3 of 15 frames failed.**" in rendered_str
     assert "4, 8, 12" in rendered_str
 
 
 def test_single_gap_uses_singular_wording() -> None:
-    """Confirm one unprotected frame is not reported as ``1 gaps``."""
+    """Confirm a single failing frame renders without a plural slip."""
 
     rendered_str = RENDERER_MODULE.render_summary(_build_summary("FAIL", [7]))
 
-    assert "**1 processing gap found**" in rendered_str
-    assert "gaps found" not in rendered_str
+    assert "**1 of 15 frames failed.**" in rendered_str
 
 
 def test_incomplete_run_avoids_claiming_a_verdict() -> None:
@@ -117,7 +116,7 @@ def test_incomplete_run_avoids_claiming_a_verdict() -> None:
     rendered_str = RENDERER_MODULE.render_summary(_build_summary("ERROR", []))
 
     assert "Verification could not be completed." in rendered_str
-    assert "processing gap" not in rendered_str
+    assert "frames failed" not in rendered_str
 
 
 def test_scope_note_is_attached_only_to_a_pass() -> None:
@@ -303,7 +302,7 @@ def test_main_renders_a_document_from_disk(
     captured_output_obj = capsys.readouterr()
 
     assert exit_code_int == 0
-    assert "**3 processing gaps found**" in captured_output_obj.out
+    assert "**3 of 15 frames failed.**" in captured_output_obj.out
 
 
 def test_main_reports_a_missing_document(
@@ -399,8 +398,137 @@ def test_rendering_a_real_verification_run(tmp_path: Path) -> None:
     rendered_str = RENDERER_MODULE.render_summary(summary_dict, "evidence")
 
     assert result_obj.status.value == "FAIL"
-    assert "**3 processing gaps found**" in rendered_str
+    assert "**3 of 15 frames failed.**" in rendered_str
     assert "4, 8, 12" in rendered_str
     assert f"`{result_obj.policy_name}`" in rendered_str
     assert rendered_str.count(RENDERER_MODULE.FAIL_CELL_TEXT) == 3
     assert "Evidence written to `evidence`." in rendered_str
+
+
+def _with_targets(
+    summary_dict: dict[str, Any],
+    *,
+    uncovered_frames_list: list[int],
+) -> dict[str, Any]:
+    """Attach target measurements to a summary document.
+
+    Args:
+        summary_dict: Document to extend.
+        uncovered_frames_list: Frames where the target was uncovered.
+
+    Returns:
+        The same mapping, extended in place.
+    """
+
+    frame_count_int = summary_dict["measurements"]["frames_checked"]
+    summary_dict["policy_name"] = "target_coverage_every_frame"
+    summary_dict["measurements"]["targets"] = {
+        "target_coverage_percent": 80.0,
+        "uncovered_target_frame_count": len(uncovered_frames_list),
+        "target_summaries": [
+            {
+                "target_id": "PLATE_A",
+                "target_type": "plate",
+                "first_frame": 1,
+                "last_frame": frame_count_int,
+                "frame_count": frame_count_int,
+                "covered_frame_count": (
+                    frame_count_int - len(uncovered_frames_list)
+                ),
+                "uncovered_frames": uncovered_frames_list,
+                "interpolated_frame_count": 4,
+                "required": True,
+            }
+        ],
+    }
+    return summary_dict
+
+
+def test_target_coverage_is_reported_when_targets_were_supplied() -> None:
+    """Confirm a target-aware run shows its coverage, not only frames."""
+
+    rendered_str = RENDERER_MODULE.render_summary(
+        _with_targets(
+            _build_summary("FAIL", [4, 8, 12]),
+            uncovered_frames_list=[4, 8, 12],
+        )
+    )
+
+    assert "| Target coverage | 80.0% |" in rendered_str
+    assert "| Target frames uncovered | 3 |" in rendered_str
+    assert "Required targets" in rendered_str
+    assert "`PLATE_A`" in rendered_str
+    assert "Uncovered target frames: `4, 8, 12`" in rendered_str
+
+
+def test_no_target_section_without_targets() -> None:
+    """Confirm a generic run renders no empty target section."""
+
+    rendered_str = RENDERER_MODULE.render_summary(
+        _build_summary("FAIL", [4, 8, 12])
+    )
+
+    assert "Required targets" not in rendered_str
+    assert "Target coverage" not in rendered_str
+
+
+def test_interpolated_target_boxes_are_visible_in_the_summary() -> None:
+    """Confirm provenance survives into the job summary.
+
+    A reviewer reading only the summary still has to be able to tell how
+    many boxes a human actually drew.
+    """
+
+    rendered_str = RENDERER_MODULE.render_summary(
+        _with_targets(_build_summary("FAIL", [4]), uncovered_frames_list=[4])
+    )
+
+    assert "Interpolated" in rendered_str
+
+
+def test_the_failure_cause_names_the_right_mode() -> None:
+    """Confirm a processed-but-missed frame is not called a gap.
+
+    Reporting an uncovered target as a processing gap would send a
+    reviewer looking for a frame where nothing happened.
+    """
+
+    summary_dict = _with_targets(
+        _build_summary("FAIL", [7]), uncovered_frames_list=[7]
+    )
+    summary_dict["failures"] = [{"code": "UNCOVERED_TARGETS"}]
+
+    rendered_str = RENDERER_MODULE.render_summary(summary_dict)
+
+    assert "a required target left uncovered" in rendered_str
+    assert "no accepted processing" not in rendered_str
+
+
+def test_both_failure_causes_are_named_together() -> None:
+    """Confirm a frame failing both ways reports both facts."""
+
+    summary_dict = _with_targets(
+        _build_summary("FAIL", [4]), uncovered_frames_list=[4]
+    )
+    summary_dict["failures"] = [
+        {"code": "UNPROCESSED_FRAMES"},
+        {"code": "UNCOVERED_TARGETS"},
+    ]
+
+    rendered_str = RENDERER_MODULE.render_summary(summary_dict)
+
+    assert "no accepted processing" in rendered_str
+    assert "a required target left uncovered" in rendered_str
+
+
+def test_the_passing_scope_note_matches_the_policy() -> None:
+    """Confirm a target-aware pass makes the stronger, correct claim."""
+
+    generic_str = RENDERER_MODULE.render_summary(_build_summary("PASS", []))
+    target_str = RENDERER_MODULE.render_summary(
+        _with_targets(_build_summary("PASS", []), uncovered_frames_list=[])
+    )
+
+    assert "accepted visual change was detected" in generic_str
+    assert "every reviewed target was covered" in target_str
+    assert "every reviewed target was covered" not in generic_str

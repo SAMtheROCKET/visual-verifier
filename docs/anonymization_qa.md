@@ -58,26 +58,36 @@ A `PASS` does **not** mean:
 - that the transformation is irreversible
 - that you are compliant with any regulation
 
-!!! warning "The semantic gap"
+!!! warning "The semantic gap, and how to close it"
 
-    The current policy is `generic_change_every_frame`. It verifies that
+    The default policy is `generic_change_every_frame`. It verifies that
     processing happened, not that the **right region** was processed.
 
     Consider a frame where the licence plate was accidentally left sharp
     but the sky changed because of compression. If that sky change clears
     the thresholds, the frame passes while the plate is still readable.
 
-    Closing this gap is
-    [V5.3 target-aware verification](target_annotation.md), where you
-    declare the regions that were required to be transformed and the
-    verifier checks those specific regions.
+    Supplying [reviewed targets](target_annotation.md) closes that gap.
+    You declare the regions that had to be transformed, the policy
+    becomes `target_coverage_every_frame`, and coverage is measured
+    against those boxes rather than against the frame.
 
-Until then, treat a `PASS` as **"the pipeline did something everywhere"**,
-which is a real and useful guarantee, and a `FAIL` as **"the pipeline
-demonstrably did nothing on these frames"**, which is a strong one.
+    ```bash
+    visual-verifier video --reference raw.mp4 --candidate out.mp4 \
+        --targets plates.csv
+    ```
 
-`FAIL` is the direction that carries the most weight today: a frame with no
-accepted change is a frame your anonymizer did not touch.
+Without targets, treat a `PASS` as **"the pipeline did something
+everywhere"**, which is a real and useful guarantee, and a `FAIL` as
+**"the pipeline demonstrably did nothing on these frames"**, which is a
+strong one.
+
+With targets, a `PASS` means every declared region was covered in every
+frame it was declared on. That is the stronger claim, and it is the one
+the [benchmark](benchmarks.md) measures at 100% recall.
+
+Neither claim is a statement about legibility. Coverage is geometric: it
+does not prove a plate became unreadable to a human.
 
 ## Tuning for weak or subtle processing
 

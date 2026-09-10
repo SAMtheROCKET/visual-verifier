@@ -50,7 +50,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/SAMtheROCKET/visual-verifier"
 Repository = "https://github.com/SAMtheROCKET/visual-verifier"
-Documentation = "https://github.com/SAMtheROCKET/visual-verifier/tree/main/docs"
+Documentation = "https://samtherocket.github.io/visual-verifier/"
 Changelog = "https://github.com/SAMtheROCKET/visual-verifier/blob/main/CHANGELOG.md"
 Issues = "https://github.com/SAMtheROCKET/visual-verifier/issues"
 

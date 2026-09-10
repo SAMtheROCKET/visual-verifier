@@ -18,6 +18,9 @@ from typing import Any
 MAX_TIMELINE_CELLS_INT = 60
 MAX_LISTED_FRAMES_INT = 30
 MAX_LISTED_TRACKS_INT = 15
+MAX_LISTED_TARGETS_INT = 15
+UNPROCESSED_CODE_TEXT = "UNPROCESSED_FRAMES"
+UNCOVERED_TARGETS_CODE_TEXT = "UNCOVERED_TARGETS"
 PASS_CELL_TEXT = "\N{LARGE GREEN CIRCLE}"
 FAIL_CELL_TEXT = "\N{LARGE RED CIRCLE}"
 STATUS_ICON_MAPPING = {
@@ -93,6 +96,7 @@ def render_summary(
         _render_headline(summary_dict),
         _render_measurements(summary_dict),
         _render_timeline(summary_dict),
+        _render_targets(summary_dict),
         _render_tracks(summary_dict),
         _render_evidence(summary_dict, evidence_hint_str),
         _render_scope_note(summary_dict),
@@ -118,12 +122,39 @@ def _render_headline(summary_dict: dict[str, Any]) -> str:
         )
     if not failed_frames_list:
         return f"{heading_str}\n\nVerification could not be completed."
-    gap_word_str = "gap" if len(failed_frames_list) == 1 else "gaps"
     return (
         f"{heading_str}\n\n"
-        f"**{len(failed_frames_list)} processing {gap_word_str} found** in "
-        f"{frames_checked_int} frames."
+        f"**{len(failed_frames_list)} of {frames_checked_int} frames "
+        f"failed.** {_failure_reason(summary_dict)}"
     )
+
+
+def _failure_reason(summary_dict: dict[str, Any]) -> str:
+    """Describe which of the two failure modes applied.
+
+    A target-aware run can fail a frame that was processed, just
+    not where it mattered. Reporting that as a processing gap
+    would send a reviewer looking for the wrong thing.
+
+    Args:
+        summary_dict: Parsed ``summary.json`` document.
+
+    Returns:
+        A sentence naming the reasons, or an empty string.
+    """
+
+    reasons_list: list[str] = []
+    for failure_obj in summary_dict.get("failures") or []:
+        if not isinstance(failure_obj, dict):
+            continue
+        code_str = str(failure_obj.get("code", ""))
+        if code_str == UNPROCESSED_CODE_TEXT:
+            reasons_list.append("no accepted processing")
+        elif code_str == UNCOVERED_TARGETS_CODE_TEXT:
+            reasons_list.append("a required target left uncovered")
+    if not reasons_list:
+        return ""
+    return "Cause: " + " and ".join(reasons_list) + "."
 
 
 def _render_measurements(summary_dict: dict[str, Any]) -> str:
@@ -140,6 +171,20 @@ def _render_measurements(summary_dict: dict[str, Any]) -> str:
         ),
         ("Frames unprotected", str(len(failed_frames_list))),
     ]
+    targets_dict = measurements_dict.get("targets")
+    if isinstance(targets_dict, dict):
+        rows_list.append(
+            (
+                "Target coverage",
+                f"{targets_dict.get('target_coverage_percent', 0)}%",
+            )
+        )
+        rows_list.append(
+            (
+                "Target frames uncovered",
+                str(targets_dict.get("uncovered_target_frame_count", 0)),
+            )
+        )
     if failed_frames_list:
         rows_list.append(
             ("Failed frames", f"`{_format_frames(failed_frames_list)}`")
@@ -188,6 +233,95 @@ def _render_timeline(summary_dict: dict[str, Any]) -> str:
     if bucket_size_int > 1:
         note_str = f"\n\n_Each cell covers {bucket_size_int} frames._"
     return f"### Frame timeline\n\n{''.join(cells_list)}{note_str}"
+
+
+def _render_targets(summary_dict: dict[str, Any]) -> str:
+    """Render reviewed-target coverage when targets were supplied.
+
+    Args:
+        summary_dict: Parsed ``summary.json`` document.
+
+    Returns:
+        The markdown section, or an empty string without targets.
+    """
+
+    summaries_list = _target_summaries(summary_dict)
+    if not summaries_list:
+        return ""
+
+    shown_list = summaries_list[:MAX_LISTED_TARGETS_INT]
+    lines_list = [
+        "### Required targets",
+        "",
+        "| Target | Type | Frames | Covered | Interpolated | Result |",
+        "| --- | --- | --- | ---: | ---: | :-: |",
+    ]
+    for summary_obj in shown_list:
+        uncovered_list = list(summary_obj.get("uncovered_frames") or [])
+        required_bool = bool(summary_obj.get("required", True))
+        passed_bool = not uncovered_list or not required_bool
+        lines_list.append(
+            f"| `{summary_obj.get('target_id', '')}` "
+            f"| {summary_obj.get('target_type', '')} "
+            f"| {summary_obj.get('first_frame', '')}"
+            f"-{summary_obj.get('last_frame', '')} "
+            f"| {summary_obj.get('covered_frame_count', 0)}"
+            f"/{summary_obj.get('frame_count', 0)} "
+            f"| {summary_obj.get('interpolated_frame_count', 0)} "
+            f"| {'PASS' if passed_bool else 'FAIL'} |"
+        )
+    omitted_int = len(summaries_list) - len(shown_list)
+    if omitted_int > 0:
+        lines_list.append(f"\n_{omitted_int} further targets omitted._")
+
+    lines_list.extend(_uncovered_frame_lines(summaries_list))
+    return "\n".join(lines_list)
+
+
+def _uncovered_frame_lines(
+    summaries_list: list[dict[str, Any]],
+) -> list[str]:
+    """Return the line naming every frame a required target was missed in.
+
+    Args:
+        summaries_list: Target summaries declared by the run.
+
+    Returns:
+        Zero or two lines, so the caller can extend unconditionally.
+    """
+
+    failed_frames_list = sorted(
+        {
+            frame_int
+            for summary_obj in summaries_list
+            for frame_int in (summary_obj.get("uncovered_frames") or [])
+            if summary_obj.get("required", True)
+        }
+    )
+    if not failed_frames_list:
+        return []
+    return [
+        "",
+        f"Uncovered target frames: `{_format_frames(failed_frames_list)}`",
+    ]
+
+
+def _target_summaries(summary_dict: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the target summary mappings, or an empty list.
+
+    Args:
+        summary_dict: Parsed ``summary.json`` document.
+
+    Returns:
+        Target summaries declared by the run.
+    """
+
+    measurements_dict = summary_dict.get("measurements") or {}
+    targets_dict = measurements_dict.get("targets") or {}
+    summaries_object = targets_dict.get("target_summaries") or []
+    if not isinstance(summaries_object, list):
+        return []
+    return [item for item in summaries_object if isinstance(item, dict)]
 
 
 def _render_tracks(summary_dict: dict[str, Any]) -> str:
@@ -247,6 +381,13 @@ def _render_scope_note(summary_dict: dict[str, Any]) -> str:
 
     if str(summary_dict.get("status")) != "PASS":
         return ""
+    if _target_summaries(summary_dict):
+        return (
+            "> A `PASS` means every reviewed target was covered by "
+            "accepted processing in every frame it was declared on. "
+            "Coverage is geometric: it does not prove the region became "
+            "unreadable to a human."
+        )
     return (
         "> A `PASS` means accepted visual change was detected in every "
         "checked frame under the configured thresholds. It does not prove "

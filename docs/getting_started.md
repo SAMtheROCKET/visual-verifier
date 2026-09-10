@@ -24,7 +24,7 @@ visual-verifier doctor
 ```text
 Visual Verifier environment check
 ========================================
-Visual Verifier: 0.2.0
+Visual Verifier: 0.3.0
 Python:          3.12.13
 Platform:        Windows-11-10.0.26200-SP0
 OpenCV:          5.0.0
