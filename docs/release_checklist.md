@@ -76,4 +76,9 @@
 The `Release` workflow performs the packaging checks automatically on a
 `v*` tag and publishes through PyPI trusted publishing.
 
-Run `scripts/validate_v5_2.ps1` for the complete automated gate.
+Run `scripts/validate_v5_2.ps1` for the complete automated gate. It runs
+`validate_release.ps1` first and then the frozen V5.2 temporal regression
+contract. That contract is retained on purpose: it pins the temporal
+behaviour that shipped in V5.2 so later milestones cannot drift it
+unnoticed. The script name refers to the contract it preserves, not to the
+current product version.

@@ -414,8 +414,8 @@ schemas may still change before a stable release.
 - Typed Python API and a self-documenting CLI
 - Linux, macOS, and Windows CI across Python 3.10–3.13
 
-Tracking is evidence-only in V5.2. It never silently changes the established
-frame-level verification policy.
+Temporal tracking remains evidence-only: it does not silently alter the
+active frame- or target-level verification policy.
 
 ## What this is not
 
@@ -466,13 +466,20 @@ Or run the same gate in one step:
 ./scripts/run_quality.ps1     # Windows
 ```
 
-Before a release, the full V5.2 gate additionally checks the exact video
-regressions, temporal report generation, CLI health, wheel contents, and
-package building:
+Before a release, run the complete release gate. It checks the frame-level
+and temporal regression contracts, target-aware verification, CLI health,
+package contents, and distribution building:
 
 ```powershell
 ./scripts/validate_v5_2.ps1
 ```
+
+That script runs `validate_release.ps1` first and then the frozen V5.2
+temporal regression contract, so one command covers both. The V5.2 gate is
+retained deliberately: it pins the temporal behaviour that shipped in that
+milestone, so later work cannot drift it unnoticed. Run
+`./scripts/validate_release.ps1` alone when you only need the current gate
+without the historical contract.
 
 Function length, line length, docstrings, annotations, control characters in
 documentation, and the agreement between the Git tag, the package version,

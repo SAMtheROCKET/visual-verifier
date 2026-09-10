@@ -67,8 +67,9 @@ selects a renderer, and maps the status onto an exit code.
 ## Compatibility design
 
 Temporal tracking is enabled by default for video verification but remains
-non-decisional in V5.2. Disabling it removes temporal reports without changing
-frame-level PASS/FAIL outcomes.
+non-decisional. Disabling it removes temporal reports without changing any
+PASS/FAIL outcome. Reviewed targets are the opposite: they are decisional by
+design, and supplying them can change the verdict.
 
 Historical scripts under `archive/legacy_cells/` remain read-only and are not
 runtime dependencies.
