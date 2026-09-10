@@ -121,7 +121,7 @@ def test_clip_box_rejects_negative_frame_dimensions(
 
     bounding_box_obj = BoundingBox(0, 0, 10, 10)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="cannot be negative"):
         clip_box_to_frame(
             bounding_box_obj,
             frame_width_int=frame_width_int,

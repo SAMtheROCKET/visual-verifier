@@ -1,0 +1,46 @@
+# Run locally with:
+#   uvx pre-commit install
+#   uvx pre-commit run --all-files
+#
+# These hooks mirror the fast half of the CI quality gate. The full gate
+# also runs mypy and the regression suite; see scripts/run_quality.sh.
+
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: check-case-conflict
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+        exclude: ^archive/
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+        exclude: ^(archive/|scripts/.*\.ps1$)
+      - id: trailing-whitespace
+        exclude: ^archive/
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.2
+    hooks:
+      - id: ruff-check
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.1
+    hooks:
+      - id: mypy
+        files: ^src/visual_verifier/
+        args: ["--python-version", "3.12"]
+        additional_dependencies:
+          - numpy>=1.26
+          - pandas-stubs

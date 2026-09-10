@@ -1,0 +1,22 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question about verification behaviour
+    url: https://github.com/SAMtheROCKET/visual-verifier/discussions
+    about: >-
+      Ask about thresholds, reports, or whether a use case is supported.
+      Never attach private or identifying media to a public thread.
+  - name: Security vulnerability
+    url: https://github.com/SAMtheROCKET/visual-verifier/security/advisories/new
+    about: >-
+      Report code execution, path traversal, unsafe file handling, or
+      private-media disclosure privately. Do not open a public issue.
+  - name: Conduct concern
+    url: https://github.com/SAMtheROCKET/visual-verifier/blob/main/CODE_OF_CONDUCT.md
+    about: >-
+      Conduct reports are handled privately, never in a public issue or
+      discussion. This explains the two private channels.
+  - name: Documentation
+    url: https://github.com/SAMtheROCKET/visual-verifier/tree/main/docs
+    about: >-
+      The verification contract, output schema, temporal tracking, and
+      known limitations are documented here.

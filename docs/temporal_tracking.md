@@ -6,8 +6,10 @@ V5.2 converts independent accepted regions into persistent temporal entities.
 The tracker explains whether detected processing remains continuous, briefly
 disappears, recovers, splits, or merges across synchronized frames.
 
-Tracking remains evidence-only. Frame-level PASS/FAIL decisions continue to
-use the established processing-presence rule.
+Temporal tracking remains evidence-only: it does not silently alter the
+active frame- or target-level verification policy. Supplying reviewed
+targets does change the verdict, but that is the target policy doing it,
+never the tracker.
 
 ## Association
 
@@ -112,4 +114,7 @@ minimum_observed_area / maximum_observed_area
 A continuous track indicates persistent detected processing. It does not prove
 that the same semantic object was processed. Low IoU, high center jitter, low
 area stability, or repeated gaps should be treated as review signals rather
-than automatic policy failures in V5.2.
+than automatic policy failures.
+
+To make a specific region's coverage decisional rather than advisory, declare
+it as a [reviewed target](target_annotation.md).

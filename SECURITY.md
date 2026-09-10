@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-Visual Verifier is currently pre-alpha. Security fixes are applied only to
-the latest development version.
+Visual Verifier is early software, classified `Alpha`. Security fixes are
+applied only to the latest release and the current main branch.
 
 | Version | Supported |
 | --- | --- |
-| `0.2.0a0` and current main branch | Yes |
-| `0.1.0a0` | Security fixes only when reproducible |
+| `0.3.0` and current main branch | Yes |
+| `0.2.0a0`, `0.1.0a0` | Security fixes only when reproducible |
 | Earlier prototypes | No |
 
 Historical scripts under `archive/legacy_cells/` are retained for research

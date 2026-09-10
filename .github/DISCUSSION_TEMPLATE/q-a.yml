@@ -1,0 +1,42 @@
+title: "[Question] "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions about verification behaviour, thresholds, or reports are
+        welcome here.
+
+        Two things belong elsewhere:
+
+        - A defect or feature proposal belongs in
+          [Issues](https://github.com/SAMtheROCKET/visual-verifier/issues/new/choose).
+        - A conduct or security concern is handled privately. See
+          `CODE_OF_CONDUCT.md` and `SECURITY.md`.
+
+        **Never attach private or identifying media to a public thread.**
+
+  - type: textarea
+    id: question
+    attributes:
+      label: What are you trying to verify?
+      description: |
+        Describe the processing you are checking and the result you
+        expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you tried?
+      description: |
+        The command or API call, plus the relevant part of the output.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Visual Verifier version
+      placeholder: "0.3.0"

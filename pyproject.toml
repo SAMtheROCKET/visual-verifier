@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visual-verifier"
-version = "0.2.0a0"
-description = "Reference-based QA for image and video processing pipelines."
+dynamic = ["version"]
+description = "Anonymization QA for images and videos. Verify blur, redaction, and masking frame by frame."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -15,6 +15,11 @@ authors = [
 ]
 keywords = [
     "anonymization",
+    "anonymization-testing",
+    "video-anonymization",
+    "image-anonymization",
+    "privacy-engineering",
+    "redaction-testing",
     "computer-vision",
     "image-processing",
     "opencv",
@@ -25,7 +30,7 @@ keywords = [
     "video-processing",
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
@@ -42,7 +47,17 @@ dependencies = [
     "pandas>=2.2",
 ]
 
+[project.urls]
+Homepage = "https://github.com/SAMtheROCKET/visual-verifier"
+Repository = "https://github.com/SAMtheROCKET/visual-verifier"
+Documentation = "https://samtherocket.github.io/visual-verifier/"
+Changelog = "https://github.com/SAMtheROCKET/visual-verifier/blob/main/CHANGELOG.md"
+Issues = "https://github.com/SAMtheROCKET/visual-verifier/issues"
+
 [dependency-groups]
+docs = [
+    "mkdocs-material>=9.5",
+]
 dev = [
     "build>=1.2",
     "mypy>=1.10",
@@ -56,6 +71,9 @@ visual-verifier = "visual_verifier.cli:main"
 
 [tool.setuptools]
 include-package-data = true
+
+[tool.setuptools.dynamic]
+version = { attr = "visual_verifier.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -78,13 +96,38 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = [
+    "ANN",
+    "ARG",
     "B",
+    "C4",
+    "C90",
+    "D",
     "E",
     "E501",
     "F",
     "I",
+    "N",
+    "PIE",
+    "PT",
+    "PTH",
+    "RET",
+    "RUF",
+    "SIM",
+    "TID",
     "UP",
 ]
+ignore = [
+    "D202",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 8
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
 
 [tool.mypy]
 python_version = "3.12"
@@ -103,3 +146,4 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+fail_under = 88

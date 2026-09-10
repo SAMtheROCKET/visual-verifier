@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
     name: Quality and package build
@@ -34,16 +38,42 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Lint
-        run: uv run ruff check .
+        run: uv run ruff check --output-format github .
 
       - name: Type-check
         run: uv run mypy src --python-version 3.12
 
-      - name: Test
-        run: uv run pytest -q
+      - name: Test with coverage gate
+        run: >-
+          uv run pytest -q
+          --cov=visual_verifier
+          --cov-report=term-missing
+          --cov-report=xml
 
       - name: Build distributions
         run: uv run python -m build
+
+      - name: Verify the built wheel installs and runs standalone
+        run: |
+          uv venv .wheel-check --python 3.12
+          uv pip install --python .wheel-check dist/*.whl
+          .wheel-check/bin/visual-verifier --version
+          .wheel-check/bin/visual-verifier doctor
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+          retention-days: 14
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 14
 
   compatibility:
     name: Python ${{ matrix.python-version }}
@@ -78,9 +108,142 @@ jobs:
       - name: Run tests
         run: uv run --python ${{ matrix.python-version }} pytest -q
 
+  action-self-test:
+    name: GitHub Action self-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Verify the partially blurred fixture
+        id: partial
+        uses: ./
+        with:
+          reference: examples/media/video_raw.mp4
+          candidate: examples/media/video_blur_partial.mp4
+          requirement: .
+          options: --no-annotated-video
+          fail-on-gap: "false"
+          upload-evidence: "false"
+
+      - name: Confirm the failing contract
+        env:
+          VV_STATUS: ${{ steps.partial.outputs.status }}
+          VV_EXIT_CODE: ${{ steps.partial.outputs.exit-code }}
+          VV_FAILED: ${{ steps.partial.outputs.failed-frame-count }}
+          VV_COVERAGE: ${{ steps.partial.outputs.processing-coverage-percent }}
+          VV_SUMMARY: ${{ steps.partial.outputs.summary-path }}
+        run: |
+          test "${VV_STATUS}" = "FAIL"
+          test "${VV_EXIT_CODE}" = "2"
+          test "${VV_FAILED}" = "3"
+          test "${VV_COVERAGE}" = "80.0"
+          test -f "${VV_SUMMARY}"
+
+      - name: Verify the fully blurred fixture
+        id: full
+        uses: ./
+        with:
+          reference: examples/media/video_raw.mp4
+          candidate: examples/media/video_blur.mp4
+          requirement: .
+          options: --no-annotated-video
+          artifact-name: action-self-test-evidence
+
+      - name: Confirm the passing contract
+        env:
+          VV_STATUS: ${{ steps.full.outputs.status }}
+          VV_EXIT_CODE: ${{ steps.full.outputs.exit-code }}
+          VV_FAILED: ${{ steps.full.outputs.failed-frame-count }}
+        run: |
+          test "${VV_STATUS}" = "PASS"
+          test "${VV_EXIT_CODE}" = "0"
+          test "${VV_FAILED}" = "0"
+
+      - name: Verify reviewed targets
+        id: targets
+        uses: ./
+        with:
+          reference: examples/media/video_raw.mp4
+          candidate: examples/media/video_blur_partial.mp4
+          targets: examples/targets/demo_targets.csv
+          requirement: .
+          options: --no-annotated-video
+          fail-on-gap: "false"
+          upload-evidence: "false"
+
+      - name: Confirm the target contract
+        env:
+          VV_STATUS: ${{ steps.targets.outputs.status }}
+          VV_COVERAGE: ${{ steps.targets.outputs.target-coverage-percent }}
+          VV_UNCOVERED: >-
+            ${{ steps.targets.outputs.uncovered-target-frame-count }}
+          VV_COUNT: ${{ steps.targets.outputs.uncovered-target-count }}
+          VV_IDS: ${{ steps.targets.outputs.uncovered-target-ids }}
+        run: |
+          test "${VV_STATUS}" = "FAIL"
+          test "${VV_COVERAGE}" = "80.0"
+          test "${VV_UNCOVERED}" = "3"
+          test "${VV_COUNT}" = "1"
+          test "${VV_IDS}" = "PLATE_A"
+
+      - name: Confirm a target the media cannot contain is refused
+        shell: bash
+        run: |
+          printf 'frame_number,target_id,x1,y1,x2,y2\n' > ghost.csv
+          printf '99,PLATE_X,100,100,200,200\n' >> ghost.csv
+          set +e
+          visual-verifier video \
+            --reference examples/media/video_raw.mp4 \
+            --candidate examples/media/video_blur.mp4 \
+            --targets ghost.csv --quiet
+          exit_code=$?
+          set -e
+          # A target nobody can evaluate must stop the run, never pass it.
+          test "${exit_code}" = "1"
+
+      # The package supports Python 3.10, but every step above pins 3.12,
+      # so 3.12-only syntax in the composite wrapper would ship unnoticed.
+      # This runs last: setting up 3.10 changes the interpreter on PATH.
+      - name: Verify GitHub Action on Python 3.10
+        uses: ./
+        with:
+          reference: examples/media/video_raw.mp4
+          candidate: examples/media/video_blur.mp4
+          requirement: .
+          python-version: "3.10"
+          options: --no-annotated-video
+          upload-evidence: "false"
+
   windows-regression:
     name: Windows regression
     runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Synchronize dependencies
+        run: uv sync --locked --python 3.12
+
+      - name: Run environment check
+        run: uv run visual-verifier doctor
+
+      - name: Run regression suite
+        run: uv run pytest -q
+
+  macos-regression:
+    name: macOS regression
+    runs-on: macos-latest
 
     steps:
       - name: Check out repository
