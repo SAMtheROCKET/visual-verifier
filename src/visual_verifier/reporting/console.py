@@ -38,6 +38,14 @@ TRACKING_LABELS_TUPLE: tuple[tuple[str, str], ...] = (
     ("tracks_with_gaps", "Tracks with gaps"),
     ("mean_continuity_ratio", "Mean continuity ratio"),
 )
+TARGET_LABELS_TUPLE: tuple[tuple[str, str], ...] = (
+    ("target_count", "Targets"),
+    ("target_frame_count", "Target frames checked"),
+    ("covered_target_frame_count", "Target frames covered"),
+    ("uncovered_target_frame_count", "Target frames uncovered"),
+    ("target_coverage_percent", "Target coverage"),
+    ("interpolated_frame_count", "Interpolated target boxes"),
+)
 
 
 def format_verification_summary(result_obj: VerificationResult) -> str:
@@ -66,6 +74,7 @@ def format_verification_summary(result_obj: VerificationResult) -> str:
         )
     )
     summary_lines_list.extend(_format_tracking_section(result_obj))
+    summary_lines_list.extend(_format_target_section(result_obj))
     summary_lines_list.extend(_format_failure_section(result_obj))
     summary_lines_list.extend(_format_evidence_section(result_obj))
     return "\n".join(summary_lines_list)
@@ -121,6 +130,27 @@ def _format_tracking_section(
             tracking_value_obj,
             TRACKING_LABELS_TUPLE,
         ),
+    )
+
+
+def _format_target_section(
+    result_obj: VerificationResult,
+) -> list[str]:
+    """Return the target coverage section when targets were supplied.
+
+    Args:
+        result_obj: Completed verification result.
+
+    Returns:
+        Section lines, or an empty list when no targets were used.
+    """
+
+    target_value_obj = result_obj.measurements.get("targets")
+    if not isinstance(target_value_obj, Mapping):
+        return []
+    return _format_section(
+        "Target coverage",
+        _format_labelled_lines(target_value_obj, TARGET_LABELS_TUPLE),
     )
 
 

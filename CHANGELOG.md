@@ -50,6 +50,8 @@ from 79% to 100% recall with no false alarms.
   frame processed in the wrong place
 - `target_report.csv` with one row per target per frame, and
   `measurements.targets` in `summary.json`
+- A  section in the console summary, printed only when
+  targets were supplied
 - Target overlays on the annotated video, coloured by coverage verdict
   and prefixed with `~` when the box was interpolated
 - `examples/targets/demo_targets.csv`, which reproduces the demo

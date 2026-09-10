@@ -137,3 +137,38 @@ def test_long_failed_frame_lists_are_truncated() -> None:
     )
 
     assert "(+76 more)" in summary_text
+
+
+def test_target_section_appears_only_with_targets() -> None:
+    """Confirm target coverage renders when targets were supplied."""
+
+    summary_text = format_verification_summary(
+        _build_result(
+            status_enum=VerificationStatus.FAIL,
+            measurements_dict={
+                "targets": {
+                    "target_count": 1,
+                    "target_frame_count": 15,
+                    "uncovered_target_frame_count": 3,
+                    "target_coverage_percent": 80.0,
+                }
+            },
+        ),
+    )
+
+    assert "Target coverage" in summary_text
+    assert "Targets:" in summary_text
+    assert "80.0%" in summary_text
+
+
+def test_no_target_section_without_targets() -> None:
+    """Confirm a run with no targets prints no empty target section."""
+
+    summary_text = format_verification_summary(
+        _build_result(
+            status_enum=VerificationStatus.FAIL,
+            measurements_dict={"targets_enabled": False},
+        ),
+    )
+
+    assert "Target coverage" not in summary_text
