@@ -249,8 +249,8 @@ result = verify_video(
     ),
 )
 
-print(result.status.value)          # FAIL
-print(result.failed_frames)         # (4, 8, 12)
+print(result.status.value)  # FAIL
+print(result.failed_frames)  # (4, 8, 12)
 print(result.measurements["tracking"]["track_count"])
 ```
 
