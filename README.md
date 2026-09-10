@@ -24,7 +24,7 @@ visual-verifier demo
 ```
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/SAMtheROCKET/visual-verifier/main/docs/assets/pass_fail_comparison.png"
+  <img src="docs/assets/pass_fail_comparison.png"
        alt="The same licence plate one frame apart: frame 3 blurred and passing, frame 4 readable and failing"
        width="720">
 </p>
@@ -76,7 +76,7 @@ Fifteen dashcam frames. A licence-plate blur that silently skipped three of
 them. Watch the verdict flip on frames 4, 8, and 12:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/SAMtheROCKET/visual-verifier/main/docs/assets/verification_demo.gif"
+  <img src="docs/assets/verification_demo.gif"
        alt="Animated verification of 15 frames, failing on frames 4, 8 and 12"
        width="640">
 </p>
@@ -373,7 +373,7 @@ Every panel below is generated from a real run by
 with the region boxes read back from `track_observation_report.csv`:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/SAMtheROCKET/visual-verifier/main/docs/assets/missed_frame_closeup.png"
+  <img src="docs/assets/missed_frame_closeup.png"
        alt="Frame 4 failing, with the tracked region highlighted and the plate readable in both reference and candidate"
        width="640">
 </p>

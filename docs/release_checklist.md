@@ -28,8 +28,11 @@
 - README assets regenerated with
   `uv run --with pillow python scripts/generate_readme_assets.py` and the
   PASS/FAIL frames they show still match the demo contract
-- README image links use absolute `raw.githubusercontent.com` URLs, since
-  PyPI cannot resolve repository-relative paths
+- README image links stay **relative** in the repository, so an editor
+  preview and GitHub's repository view render them. The release workflow
+  runs `scripts/build_pypi_readme.py --ref <tag>` before building,
+  because PyPI resolves neither relative paths nor a ref that does not
+  exist yet. `tests/test_readme_assets.py` enforces both halves
 - `uv run --with twine twine check --strict dist/*` passes
 - `uv run python scripts/check_release_version.py vX.Y.Z` passes for the
   tag you are about to push; the release workflow runs it too

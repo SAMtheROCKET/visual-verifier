@@ -114,6 +114,14 @@ from 79% to 100% recall with no false alarms.
 - **The action's default requirement was unpinned.** `@v0.3.0` could
   install any later release, defeating the point of pinning the tag. It
   now defaults to `visual-verifier==0.3.0`
+- **README images rendered nowhere before the first push.** They used
+  absolute `raw.githubusercontent.com/.../main/...` URLs, which return
+  404 until that exact ref carries the assets, so an editor preview and
+  every fresh clone showed alt text instead. Links are now relative, and
+  `scripts/build_pypi_readme.py` converts them at release time because
+  PyPI resolves neither form. `tests/test_readme_assets.py` checks that
+  every linked file exists, that no absolute URL creeps back in, and
+  that the release workflow converts before it builds
 - A determinism test replaced the bare words `first` and `second`
   anywhere in the report, so a repository path containing either word
   made a correct implementation look nondeterministic. It now
