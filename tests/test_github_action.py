@@ -221,3 +221,44 @@ def test_no_documented_field_was_removed() -> None:
     assert not stale_names_list, (
         f"github_action.md documents removed fields {stale_names_list}"
     )
+
+
+def test_the_action_is_exercised_on_the_minimum_python() -> None:
+    """Confirm the composite wrapper is run on the oldest supported Python.
+
+    Every other self-test step pins 3.12, so 3.12-only syntax in the
+    wrapper's inline Python would pass CI while breaking the 3.10 users
+    the package still advertises support for.
+    """
+
+    minimum_version_str = _minimum_supported_python()
+    workflow_texts_list = [
+        path_obj.read_text(encoding="utf-8")
+        for path_obj in WORKFLOW_DIRECTORY_PATH.glob("*.yml")
+    ]
+
+    assert any(
+        "uses: ./" in workflow_text_str
+        and f'python-version: "{minimum_version_str}"' in workflow_text_str
+        for workflow_text_str in workflow_texts_list
+    ), (
+        f"a workflow must run the local action with python-version "
+        f'"{minimum_version_str}", the minimum in pyproject.toml'
+    )
+
+
+def _minimum_supported_python() -> str:
+    """Return the lowest Python version the package claims to support.
+
+    Returns:
+        A version such as ``3.10``, read from ``requires-python``.
+    """
+
+    pyproject_text = (REPOSITORY_ROOT_PATH / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    match_obj = re.search(
+        r'requires-python\s*=\s*"[><=]*\s*(\d+\.\d+)', pyproject_text
+    )
+    assert match_obj is not None, "requires-python not found"
+    return match_obj.group(1)

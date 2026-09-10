@@ -234,9 +234,8 @@ runs:
         print(
             f"uncovered-target-frame-count={uncovered_frames}"
         )
-        print(
-            f"uncovered-target-count={len(uncovered) if targets else ""}"
-        )
+        uncovered_count = len(uncovered) if targets else ""
+        print(f"uncovered-target-count={uncovered_count}")
         print(f"uncovered-target-ids={' '.join(uncovered)}")
         PYTHON
 

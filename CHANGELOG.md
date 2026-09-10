@@ -79,6 +79,12 @@ from 79% to 100% recall with no false alarms.
   modes applied
 - Reviewed targets in the `GitHub Action self-test` job, including a
   check that a target the media cannot contain fails the run
+- A `GitHub Action self-test` run on Python 3.10, the minimum the
+  package supports. Every other step in that job pins 3.12, so
+  3.12-only syntax in the composite wrapper would have passed CI while
+  breaking the oldest supported interpreter. `tests/test_github_action.py`
+  reads the minimum from `requires-python` and fails if no workflow
+  exercises the action on it
 
 ### Fixed
 

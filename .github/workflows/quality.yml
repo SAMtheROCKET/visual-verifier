@@ -203,6 +203,19 @@ jobs:
           # A target nobody can evaluate must stop the run, never pass it.
           test "${exit_code}" = "1"
 
+      # The package supports Python 3.10, but every step above pins 3.12,
+      # so 3.12-only syntax in the composite wrapper would ship unnoticed.
+      # This runs last: setting up 3.10 changes the interpreter on PATH.
+      - name: Verify GitHub Action on Python 3.10
+        uses: ./
+        with:
+          reference: examples/media/video_raw.mp4
+          candidate: examples/media/video_blur.mp4
+          requirement: .
+          python-version: "3.10"
+          options: --no-annotated-video
+          upload-evidence: "false"
+
   windows-regression:
     name: Windows regression
     runs-on: windows-latest
