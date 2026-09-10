@@ -1,0 +1,22 @@
+# Normalize line endings so Linux, macOS, and Windows contributors and CI
+# runners all see identical file content.
+* text=auto eol=lf
+
+# Windows tooling requires CRLF.
+*.ps1 text eol=crlf
+
+# POSIX scripts must never gain CRLF.
+*.sh text eol=lf
+
+# Binary fixtures and distributions must never be transformed or diffed.
+*.mp4 binary
+*.png binary
+*.jpg binary
+*.whl binary
+*.gz binary
+
+# Keep generated lock noise out of pull-request diffs.
+uv.lock linguist-generated=true
+
+# Historical prototypes are read-only reference material.
+archive/** linguist-vendored=true

@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "description": "Executable expectations for the bundled example media. tests/test_demo_contract.py runs every case, so this file cannot drift from the shipped behaviour.",
+  "frame_count": 15,
+  "cases": {
+    "full_blur": {
+      "title": "Raw versus fully blurred video",
+      "reference": "media/video_raw.mp4",
+      "candidate": "media/video_blur.mp4",
+      "expected_status": "PASS",
+      "expected_failed_frames": [],
+      "expected_processing_coverage_percent": 100.0
+    },
+    "partial_blur": {
+      "title": "Raw versus partially blurred video",
+      "reference": "media/video_raw.mp4",
+      "candidate": "media/video_blur_partial.mp4",
+      "expected_status": "FAIL",
+      "expected_failed_frames": [4, 8, 12],
+      "expected_processing_coverage_percent": 80.0
+    }
+  }
+}

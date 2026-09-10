@@ -6,7 +6,7 @@
 - Image and synchronized-video verification
 - Region metrics, filtering, annotations, reports, CLI, and CI
 
-## V5.2 / 0.2.0a0 — complete
+## V5.2 / 0.2.0 — complete
 
 - Deterministic IoU association
 - Explicit track lifecycle and short-gap recovery

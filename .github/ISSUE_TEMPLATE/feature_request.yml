@@ -1,0 +1,53 @@
+name: Feature request
+description: Propose a capability, threshold, report, or integration.
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Visual Verifier checks processed media. It does not perform
+        anonymization, redaction, watermarking, or any other
+        transformation. Proposals that ask it to process media are out of
+        scope by design.
+
+        Please check `ROADMAP.md` first; the milestone you want may
+        already be planned.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What verification problem does this solve?
+      description: Describe the failure you cannot currently detect or prove.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: |
+        Inputs, outputs, PASS/FAIL implications, and any new report
+        fields or CLI options.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Closest roadmap milestone
+      options:
+        - "V5.3 target-aware temporal verification"
+        - "V5.4 selectable policy system"
+        - "V5.5 batch and integration layer"
+        - "V5.6 robustness and calibration"
+        - "V6.0 public beta"
+        - "Not covered by the roadmap"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing options, thresholds, or workarounds you tried.

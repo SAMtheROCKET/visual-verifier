@@ -373,9 +373,9 @@ class FrameTrackingResult:
 __all__ = [
     "EVENT_LABEL_PREFIX_STR",
     "EVENT_LABEL_WIDTH_INT",
-    "FrameTrackingResult",
     "TRACK_LABEL_PREFIX_STR",
     "TRACK_LABEL_WIDTH_INT",
+    "FrameTrackingResult",
     "TrackEvent",
     "TrackEventType",
     "TrackLifecycleState",

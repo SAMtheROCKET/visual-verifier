@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from math import hypot
 from statistics import fmean
 
@@ -275,11 +276,7 @@ def _center_jitter(
         return 0.0
     displacement_values_list = [
         _center_displacement(previous_obj, current_obj)
-        for previous_obj, current_obj in zip(
-            observations,
-            observations[1:],
-            strict=False,
-        )
+        for previous_obj, current_obj in pairwise(observations)
     ]
     return round(fmean(displacement_values_list), 4)
 

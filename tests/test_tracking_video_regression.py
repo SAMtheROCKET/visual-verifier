@@ -38,7 +38,7 @@ def test_full_blur_tracking_is_deterministic(tmp_path: Path) -> None:
     assert first_summary_dict["track_label"] == "T001"
     assert first_summary_dict["observation_count"] == 15
     assert first_summary_dict["continuity_ratio"] == 1.0
-    assert TRACK_REPORT_NAMES_FROZENSET <= frozenset(result_obj.evidence_paths)
+    assert frozenset(result_obj.evidence_paths) >= TRACK_REPORT_NAMES_FROZENSET
 
 
 def test_partial_blur_primary_track_preserves_failed_frame_gaps(

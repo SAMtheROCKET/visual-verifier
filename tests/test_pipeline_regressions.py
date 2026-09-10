@@ -14,6 +14,9 @@ REPOSITORY_ROOT_PATH = Path(__file__).resolve().parents[1]
 EXAMPLE_MEDIA_DIRECTORY_PATH = REPOSITORY_ROOT_PATH / "examples" / "media"
 TEST_IMAGE_HEIGHT_INT = 32
 TEST_IMAGE_WIDTH_INT = 32
+ANNOTATED_VIDEO_FRAME_COUNT_INT = 15
+ANNOTATED_VIDEO_WIDTH_INT = 1280
+ANNOTATED_VIDEO_HEIGHT_INT = 720
 EXPECTED_IMAGE_EVIDENCE_NAMES_FROZENSET = frozenset(
     {
         "annotated_image",
@@ -120,10 +123,15 @@ def test_missing_image_raises_structured_media_error(
     assert error_info_obj.value.context_dict["media_type"] == "image"
 
 
-def test_annotated_video_writer_creates_nonempty_output(
+def test_annotated_video_writer_creates_decodable_output(
     tmp_path: Path,
 ) -> None:
-    """Confirm the OpenCV writer creates annotated video evidence."""
+    """Confirm annotated evidence decodes with the reference geometry.
+
+    A writer can open successfully and still produce an unplayable file
+    when the host OpenCV build lacks a working encoder. Checking only the
+    file size would hide that, so the evidence is decoded back.
+    """
 
     result_obj = verify_video(
         EXAMPLE_MEDIA_DIRECTORY_PATH / "video_raw.mp4",
@@ -131,8 +139,27 @@ def test_annotated_video_writer_creates_nonempty_output(
         output_dir=tmp_path / "video_result",
         save_annotated_video=True,
     )
-
     annotated_path_obj = result_obj.evidence_paths["annotated_video"]
+
     assert result_obj.passed
     assert annotated_path_obj.exists()
     assert annotated_path_obj.stat().st_size > 0
+
+    decoded_frame_count_int = 0
+    video_capture_obj = cv2.VideoCapture(str(annotated_path_obj))
+    try:
+        assert video_capture_obj.isOpened()
+        while True:
+            frame_read_bool, frame_ndarray = video_capture_obj.read()
+            if not frame_read_bool:
+                break
+            assert frame_ndarray.shape == (
+                ANNOTATED_VIDEO_HEIGHT_INT,
+                ANNOTATED_VIDEO_WIDTH_INT,
+                3,
+            )
+            decoded_frame_count_int += 1
+    finally:
+        video_capture_obj.release()
+
+    assert decoded_frame_count_int == ANNOTATED_VIDEO_FRAME_COUNT_INT

@@ -1,0 +1,74 @@
+name: Bug report
+description: Report incorrect verification behaviour, a crash, or a wrong report.
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve Visual Verifier.
+
+        **Before you attach media:** verification inputs and generated
+        evidence can contain faces, licence plates, or other private
+        content. Remove or synthesize anything you cannot publish.
+
+  - type: input
+    id: version
+    attributes:
+      label: Visual Verifier version
+      description: Output of `visual-verifier --version`.
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Python and operating system
+      description: Output of `visual-verifier doctor` is ideal.
+      placeholder: "Python 3.12.13 on Windows-11-10.0.26200"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command or API call
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: |
+        Include the exit code, any `ERROR [CODE]` line, and the relevant
+        rows of `summary.json` or the CSV reports.
+    validations:
+      required: true
+
+  - type: textarea
+    id: fixture
+    attributes:
+      label: Minimal reproducible media
+      description: |
+        A shareable fixture, or a description of how to generate one. The
+        bundled `examples/media/` clips are a good starting point.
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I removed private or identifying media from this report.
+          required: true
+        - label: I reproduced this on the latest `main` or a released version.
+          required: true

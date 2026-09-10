@@ -13,8 +13,26 @@
 - `uv run ruff format --check .`
 - `uv run ruff check .`
 - `uv run mypy src --python-version 3.12`
-- `uv run pytest -q`
+- `uv run pytest -q --cov=visual_verifier`
+- Coverage meets the gate in `pyproject.toml`
 - `uv run visual-verifier doctor`
+- `uv run visual-verifier --version` matches `visual_verifier.__version__`
+
+## Documentation integrity
+
+- Every documented command is copy-pasteable and free of control
+  characters, verified by `tests/test_repository_hygiene.py`
+- `examples/expected/demo_expectations.json` matches the README table
+- `CHANGELOG.md` records every user-visible change
+- `CITATION.cff` version matches the package version
+- README assets regenerated with
+  `uv run --with pillow python scripts/generate_readme_assets.py` and the
+  PASS/FAIL frames they show still match the demo contract
+- README image links use absolute `raw.githubusercontent.com` URLs, since
+  PyPI cannot resolve repository-relative paths
+- `uv run --with twine twine check --strict dist/*` passes
+- `uv run python scripts/check_release_version.py vX.Y.Z` passes for the
+  tag you are about to push; the release workflow runs it too
 
 ## Frame regression contract
 
@@ -36,7 +54,12 @@
 - Confirm the wheel contains `visual_verifier/py.typed`.
 - Confirm active tracking and track-report modules are included.
 - Confirm tests, archives, caches, and placeholders are excluded.
-- Confirm version metadata is `0.2.0a0`.
+- Confirm the wheel installs into a clean environment and that
+  `visual-verifier doctor` runs from it.
+- Confirm version metadata matches `visual_verifier.__version__`.
 - Review `CHANGELOG.md`, `ROADMAP.md`, and `CITATION.cff`.
+
+The `Release` workflow performs the packaging checks automatically on a
+`v*` tag and publishes through PyPI trusted publishing.
 
 Run `scripts/validate_v5_2.ps1` for the complete automated gate.

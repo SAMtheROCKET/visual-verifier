@@ -195,8 +195,8 @@ def _validate_non_negative_finite_value(
 __all__ = [
     "CHANGED_RATIO_TOO_LOW_REASON_STR",
     "MEAN_DIFFERENCE_TOO_LOW_REASON_STR",
-    "RegionFilterDecision",
     "SEVERITY_SCORE_TOO_LOW_REASON_STR",
+    "RegionFilterDecision",
     "evaluate_region_filtering",
     "is_region_accepted",
     "rejection_reasons",

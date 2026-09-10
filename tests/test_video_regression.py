@@ -21,6 +21,7 @@ EXPECTED_PARTIAL_COVERAGE_FLOAT = 80.0
 EXPECTED_REPORT_NAMES_FROZENSET = frozenset(
     {
         "frame_report",
+        "html_report",
         "region_report",
         "rejected_region_report",
         "summary_json",

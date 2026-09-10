@@ -1,0 +1,87 @@
+site_name: Visual Verifier
+site_description: >-
+  Anonymization QA for images and videos. Test blur, redaction, masking,
+  and other visual processing frame by frame, with deterministic PASS/FAIL,
+  temporal evidence, and CI-ready reports.
+site_url: https://samtherocket.github.io/visual-verifier/
+site_author: Sambit Supriya Dash
+
+repo_url: https://github.com/SAMtheROCKET/visual-verifier
+repo_name: SAMtheROCKET/visual-verifier
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+strict: true
+
+theme:
+  name: material
+  # Self-hosted only. Visual Verifier tells users their media never leaves
+  # their machine, so its own documentation must not load third-party
+  # fonts or trackers either.
+  font: false
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+
+plugins:
+  - search
+
+nav:
+  - Home: README.md
+  - Getting started: getting_started.md
+  - Guides:
+      - Anonymization QA: anonymization_qa.md
+      - Use it in CI: ci.md
+      - Use cases: use_cases.md
+  - Reference:
+      - Command line: cli.md
+      - Python API: python_api.md
+      - Output schema: output_schema.md
+      - Temporal tracking: temporal_tracking.md
+      - Verification contract: verification_contract.md
+  - Scope and limits:
+      - Problem statement: problem_statement.md
+      - Limitations: limitations.md
+  - Roadmap:
+      - Target annotation (V5.3): target_annotation.md
+      - Policy system (V5.4): policy_system.md
+  - Contributing:
+      - Architecture: architecture.md
+      - Code style: CODE_STYLE.md
+      - Release checklist: release_checklist.md
+      - Development history: development_history.md

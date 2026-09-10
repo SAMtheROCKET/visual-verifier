@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import cv2
 
 from visual_verifier.exceptions import MediaReadError
 from visual_verifier.models import MediaMetadata
-from visual_verifier.type_aliases import PathInput
+from visual_verifier.type_aliases import PathInput, VideoCapture
 
 IMAGE_MEDIA_TYPE_STR = "image"
 VIDEO_MEDIA_TYPE_STR = "video"
@@ -116,7 +115,7 @@ def _resolve_media_path(
 
 
 def _validate_video_capture(
-    video_capture_obj: Any,
+    video_capture_obj: VideoCapture,
     media_path_obj: Path,
 ) -> None:
     """Validate that OpenCV opened a video stream.
@@ -141,7 +140,7 @@ def _validate_video_capture(
 
 def _build_video_metadata(
     media_path_obj: Path,
-    video_capture_obj: Any,
+    video_capture_obj: VideoCapture,
 ) -> MediaMetadata:
     """Build metadata from an open video capture.
 
@@ -192,7 +191,7 @@ def _build_video_metadata(
 
 
 def _read_capture_float(
-    video_capture_obj: Any,
+    video_capture_obj: VideoCapture,
     property_identifier_int: int,
 ) -> float:
     """Read one floating-point OpenCV capture property.
@@ -209,7 +208,7 @@ def _read_capture_float(
 
 
 def _read_capture_int(
-    video_capture_obj: Any,
+    video_capture_obj: VideoCapture,
     property_identifier_int: int,
 ) -> int:
     """Read one integer-valued OpenCV capture property.

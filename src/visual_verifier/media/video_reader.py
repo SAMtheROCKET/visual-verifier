@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import cv2
 import numpy as np
@@ -13,6 +12,7 @@ from visual_verifier.exceptions import MediaReadError
 from visual_verifier.type_aliases import (
     ImageArray,
     PathInput,
+    VideoCapture,
     VideoFramePair,
 )
 
@@ -62,8 +62,8 @@ class VideoPairReader(Iterator[VideoFramePair]):
             candidate_path,
             CANDIDATE_ROLE_STR,
         )
-        self._reference_capture_obj: Any | None = None
-        self._candidate_capture_obj: Any | None = None
+        self._reference_capture_obj: VideoCapture | None = None
+        self._candidate_capture_obj: VideoCapture | None = None
         self._next_frame_number_int = FIRST_FRAME_NUMBER_INT
         self._closed_bool = False
 
@@ -171,9 +171,9 @@ class VideoPairReader(Iterator[VideoFramePair]):
 
     def _require_open_capture(
         self,
-        video_capture_obj: Any | None,
+        video_capture_obj: VideoCapture | None,
         video_role_str: str,
-    ) -> Any:
+    ) -> VideoCapture:
         """Return one open capture or raise a lifecycle error.
 
         Args:
@@ -253,7 +253,7 @@ def _resolve_video_path(
 def _open_video_capture(
     video_path_obj: Path,
     video_role_str: str,
-) -> Any:
+) -> VideoCapture:
     """Open one OpenCV video capture.
 
     Args:
@@ -281,7 +281,9 @@ def _open_video_capture(
     )
 
 
-def _read_frame(video_capture_obj: Any) -> ImageArray | None:
+def _read_frame(
+    video_capture_obj: VideoCapture,
+) -> ImageArray | None:
     """Decode and normalize the next frame from one capture.
 
     Args:
@@ -302,7 +304,9 @@ def _read_frame(video_capture_obj: Any) -> ImageArray | None:
     return np.ascontiguousarray(normalized_frame_ndarray)
 
 
-def _release_capture(video_capture_obj: Any | None) -> None:
+def _release_capture(
+    video_capture_obj: VideoCapture | None,
+) -> None:
     """Release an optional OpenCV capture.
 
     Args:

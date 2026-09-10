@@ -15,11 +15,13 @@ $REQUIRED_WHEEL_PATHS = @(
     "visual_verifier/api.py",
     "visual_verifier/cli.py",
     "visual_verifier/py.typed",
+    "visual_verifier/media/video_writer.py",
     "visual_verifier/tracking/association.py",
     "visual_verifier/tracking/tracker.py",
     "visual_verifier/tracking/analysis.py",
     "visual_verifier/tracking/events.py",
-    "visual_verifier/reporting/track_report.py"
+    "visual_verifier/reporting/track_report.py",
+    "visual_verifier/reporting/console.py"
 )
 
 $FORBIDDEN_WHEEL_FRAGMENTS = @(

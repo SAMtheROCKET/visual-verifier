@@ -14,6 +14,16 @@ Visual Verifier addresses a narrower problem:
 > visual changes and return reproducible evidence about whether the current
 > verification rule passed.
 
+## Scope of the engine
+
+Anonymization is the named use case because that is where a missed
+frame is most expensive, and it is what people search for. The engine
+itself is general: it measures pixel-level change between a reference
+and a candidate and makes no assumption about why the pixels changed.
+Watermarking, overlay application, transcoding, filter chains,
+compositing, and ordinary processed-media regression tests all use the
+same contract.
+
 ## Current scope
 
 The active package compares aligned media with matching content. It detects

@@ -46,15 +46,15 @@ locations without advertising nonexistent behavior.
 Run:
 
 ```powershell
-Unblock-File .\scripts\clean_repository.ps1
-Unblock-File .\scripts\validate_release.ps1
+Unblock-File ./scripts/clean_repository.ps1
+Unblock-File ./scripts/validate_release.ps1
 
 Set-ExecutionPolicy `
     -Scope Process `
     -ExecutionPolicy Bypass `
     -Force
 
-.\scripts\validate_release.ps1
+./scripts/validate_release.ps1
 ```
 
 Expected final line:

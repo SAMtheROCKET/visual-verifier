@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TypeAlias
 
+import cv2
 import numpy as np
 from numpy.typing import NDArray
 
@@ -20,6 +21,9 @@ PathInput: TypeAlias = str | Path
 ReportRow: TypeAlias = dict[str, object]
 """One machine-readable row written to a CSV or tabular report."""
 
+VideoCapture: TypeAlias = cv2.VideoCapture
+"""Open OpenCV video capture handle used by media readers."""
+
 VideoFramePair: TypeAlias = tuple[int, ImageArray, ImageArray]
 """Frame number, reference frame, and candidate frame tuple."""
 
@@ -28,5 +32,6 @@ __all__ = [
     "MaskArray",
     "PathInput",
     "ReportRow",
+    "VideoCapture",
     "VideoFramePair",
 ]

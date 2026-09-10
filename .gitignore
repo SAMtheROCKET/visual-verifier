@@ -18,6 +18,7 @@ env/
 .tox/
 .nox/
 .release-venv/
+.wheel-check/
 
 # Packaging and build artifacts
 *.egg-info/

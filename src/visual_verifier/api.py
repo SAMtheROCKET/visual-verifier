@@ -39,6 +39,7 @@ def verify_video(
     output_dir: PathInput | None = None,
     expect_processing_every_frame: bool = True,
     save_annotated_video: bool = True,
+    save_html_report: bool = True,
     config: DetectionConfig = DEFAULT_DETECTION_CONFIG,
     enable_tracking: bool = True,
     tracking_config: TrackingConfig = DEFAULT_TRACKING_CONFIG,
@@ -51,7 +52,10 @@ def verify_video(
         output_dir: Optional directory for reports and annotated evidence.
         expect_processing_every_frame: Require an accepted changed region
             in every synchronized frame.
-        save_annotated_video: Write annotated MP4 evidence when output is set.
+        save_annotated_video: Write annotated MP4 evidence when output
+            is set.
+        save_html_report: Write a self-contained ``index.html``
+            evidence report when output is set.
         config: Region-detection and severity thresholds.
         enable_tracking: Associate accepted regions through time.
         tracking_config: Temporal association and lifecycle settings.
@@ -66,6 +70,7 @@ def verify_video(
         output_dir=output_dir,
         expect_processing_every_frame=expect_processing_every_frame,
         save_annotated_video=save_annotated_video,
+        save_html_report=save_html_report,
         config=config,
         enable_tracking=enable_tracking,
         tracking_config=tracking_config,

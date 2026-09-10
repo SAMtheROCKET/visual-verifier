@@ -20,7 +20,7 @@ analysis to the validated V5.1b foundation.
 Run:
 
 ```powershell
-.\scriptsalidate_v5_2.ps1
+./scripts/validate_v5_2.ps1
 ```
 
 The script runs cleanup, locked dependency synchronization, Ruff, Mypy,

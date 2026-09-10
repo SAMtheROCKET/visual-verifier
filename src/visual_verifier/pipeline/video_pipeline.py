@@ -17,7 +17,9 @@ from visual_verifier.media.metadata import read_video_metadata
 from visual_verifier.media.normalization import (
     resize_candidate_to_reference,
 )
+from visual_verifier.media.thumbnails import encode_frame_thumbnail
 from visual_verifier.media.video_reader import iter_video_pairs
+from visual_verifier.media.video_writer import open_annotated_writer
 from visual_verifier.models import (
     DetectionConfig,
     FrameVerification,
@@ -29,6 +31,11 @@ from visual_verifier.models import (
 )
 from visual_verifier.reporting.annotations import annotate_frame
 from visual_verifier.reporting.csv_report import write_csv_report
+from visual_verifier.reporting.html_report import (
+    HTML_REPORT_FILENAME_STR,
+    FrameThumbnail,
+    write_html_report,
+)
 from visual_verifier.reporting.json_report import write_json_report
 from visual_verifier.reporting.track_report import write_tracking_reports
 from visual_verifier.tracking.analysis import analyze_tracks
@@ -41,7 +48,6 @@ from visual_verifier.tracking.models import (
 from visual_verifier.tracking.tracker import TemporalRegionTracker
 from visual_verifier.type_aliases import ImageArray, PathInput, ReportRow
 
-VIDEO_CODEC_TEXT = "mp4v"
 FALLBACK_VIDEO_FPS_FLOAT = 30.0
 GENERIC_VIDEO_POLICY_NAME_STR = "generic_change_every_frame"
 UNPROCESSED_FRAMES_FAILURE_CODE_STR = "UNPROCESSED_FRAMES"
@@ -50,6 +56,7 @@ FRAME_REPORT_FILENAME_STR = "frame_report.csv"
 REGION_REPORT_FILENAME_STR = "region_report.csv"
 REJECTED_REGION_REPORT_FILENAME_STR = "rejected_region_report.csv"
 SUMMARY_REPORT_FILENAME_STR = "summary.json"
+MAX_CAPTURED_THUMBNAILS_INT = 24
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +85,9 @@ class _VideoRunBuffers:
     tracking_observations_tuple: tuple[TrackObservation, ...] = ()
     tracking_events_tuple: tuple[TrackEvent, ...] = ()
     track_summaries_tuple: tuple[TrackSummary, ...] = ()
+    failed_frame_thumbnails_list: list[FrameThumbnail] = field(
+        default_factory=list
+    )
 
     def record(
         self,
@@ -104,6 +114,38 @@ class _VideoRunBuffers:
             self.failed_frames_list.append(frame_result_obj.frame_number)
         if tracking_result_obj is not None:
             self.tracking_results_list.append(tracking_result_obj)
+
+    def capture_failed_frame(
+        self,
+        frame_result_obj: FrameVerification,
+        reference_frame_ndarray: ImageArray,
+        candidate_frame_ndarray: ImageArray,
+    ) -> None:
+        """Store thumbnails for one unprotected frame.
+
+        Args:
+            frame_result_obj: Completed frame verification.
+            reference_frame_ndarray: Original frame.
+            candidate_frame_ndarray: Normalized candidate frame.
+        """
+
+        if not frame_result_obj.failed:
+            return
+        if len(self.failed_frame_thumbnails_list) >= (
+            MAX_CAPTURED_THUMBNAILS_INT
+        ):
+            return
+        self.failed_frame_thumbnails_list.append(
+            FrameThumbnail(
+                frame_number=frame_result_obj.frame_number,
+                reference_jpeg_bytes=encode_frame_thumbnail(
+                    reference_frame_ndarray
+                ),
+                candidate_jpeg_bytes=encode_frame_thumbnail(
+                    candidate_frame_ndarray
+                ),
+            )
+        )
 
     def finalize_tracking(
         self,
@@ -148,6 +190,7 @@ class VideoVerificationPipeline:
         *,
         expect_processing_every_frame_bool: bool,
         save_annotated_video_bool: bool,
+        save_html_report_bool: bool,
         detection_config_obj: DetectionConfig,
         enable_tracking_bool: bool,
         tracking_config_obj: TrackingConfig,
@@ -158,6 +201,7 @@ class VideoVerificationPipeline:
             expect_processing_every_frame_bool
         )
         self._save_annotated_video_bool = save_annotated_video_bool
+        self._save_html_report_bool = save_html_report_bool
         self._detection_config_obj = detection_config_obj
         self._enable_tracking_bool = enable_tracking_bool
         self._tracking_config_obj = tracking_config_obj
@@ -202,6 +246,7 @@ class VideoVerificationPipeline:
             run_context_obj.output_path_obj,
             annotated_writer_obj.output_path_obj,
             self._enable_tracking_bool,
+            self._save_html_report_bool,
         )
 
     def _create_tracker(self) -> TemporalRegionTracker | None:
@@ -286,6 +331,11 @@ class VideoVerificationPipeline:
                 frame_result_obj,
                 tracking_result_obj,
             )
+            run_buffers_obj.capture_failed_frame(
+                frame_result_obj,
+                reference_frame_ndarray,
+                normalized_candidate_ndarray,
+            )
             _write_annotated_frame(
                 annotated_writer_obj,
                 normalized_candidate_ndarray,
@@ -344,6 +394,7 @@ def verify_video_pipeline(
     output_dir: PathInput | None,
     expect_processing_every_frame: bool,
     save_annotated_video: bool,
+    save_html_report: bool,
     config: DetectionConfig,
     enable_tracking: bool = True,
     tracking_config: TrackingConfig = DEFAULT_TRACKING_CONFIG,
@@ -353,6 +404,7 @@ def verify_video_pipeline(
     pipeline_obj = VideoVerificationPipeline(
         expect_processing_every_frame_bool=(expect_processing_every_frame),
         save_annotated_video_bool=save_annotated_video,
+        save_html_report_bool=save_html_report,
         detection_config_obj=config,
         enable_tracking_bool=enable_tracking,
         tracking_config_obj=tracking_config,
@@ -409,35 +461,25 @@ def _open_video_writer(
     annotated_path_obj: Path,
     reference_metadata_obj: MediaMetadata,
 ) -> cv2.VideoWriter:
-    """Open and validate an OpenCV annotated-video writer."""
+    """Open an annotated-video writer for the reference geometry.
 
-    frames_per_second_float = _select_output_frame_rate(
-        reference_metadata_obj.fps
-    )
-    video_writer_obj = cv2.VideoWriter(
-        str(annotated_path_obj),
-        _build_video_codec(),
-        frames_per_second_float,
+    Args:
+        annotated_path_obj: Destination path for annotated evidence.
+        reference_metadata_obj: Reference metadata supplying the output
+            frame rate and resolution.
+
+    Returns:
+        Open OpenCV writer using the first codec this platform supports.
+
+    Raises:
+        ReportWriteError: When no supported codec can be opened.
+    """
+
+    return open_annotated_writer(
+        annotated_path_obj,
+        _select_output_frame_rate(reference_metadata_obj.fps),
         reference_metadata_obj.resolution,
     )
-    if video_writer_obj.isOpened():
-        return video_writer_obj
-    video_writer_obj.release()
-    raise ReportWriteError(
-        "Could not open the annotated-video writer.",
-        context_mapping={
-            "output_path": str(annotated_path_obj),
-            "codec": VIDEO_CODEC_TEXT,
-            "fps": frames_per_second_float,
-            "resolution": reference_metadata_obj.resolution,
-        },
-    )
-
-
-def _build_video_codec() -> int:
-    """Build the configured OpenCV video-codec identifier."""
-
-    return cv2.VideoWriter.fourcc(*VIDEO_CODEC_TEXT)
 
 
 def _select_output_frame_rate(reference_fps_float: float) -> float:
@@ -728,29 +770,68 @@ def _write_optional_evidence(
     output_path_obj: Path | None,
     annotated_path_obj: Path | None,
     tracking_enabled_bool: bool,
+    html_report_enabled_bool: bool,
 ) -> VerificationResult:
-    """Write requested evidence and enrich the immutable result."""
+    """Write requested evidence and enrich the immutable result.
+
+    Every evidence path is resolved before ``summary.json`` is written, so
+    the machine-readable document describes each file written beside it.
+
+    Args:
+        result_obj: Verification result before evidence is attached.
+        run_buffers_obj: Collected frame, region, and tracking evidence.
+        output_path_obj: Evidence directory, or ``None`` to write nothing.
+        annotated_path_obj: Annotated video path when one was written.
+        tracking_enabled_bool: Whether temporal reports were produced.
+        html_report_enabled_bool: Whether to write the HTML report.
+
+    Returns:
+        Result enriched with every generated evidence path.
+    """
 
     if output_path_obj is None:
         return result_obj
-    evidence_paths_dict = _write_report_files(
-        result_obj,
+    evidence_paths_dict = _resolve_evidence_paths(
         run_buffers_obj,
         output_path_obj,
         annotated_path_obj,
         tracking_enabled_bool,
+        html_report_enabled_bool,
     )
-    return result_obj.with_evidence_paths(evidence_paths_dict)
+    enriched_result_obj = result_obj.with_evidence_paths(evidence_paths_dict)
+    write_json_report(
+        enriched_result_obj.to_dict(),
+        evidence_paths_dict["summary_json"],
+    )
+    if html_report_enabled_bool:
+        write_html_report(
+            enriched_result_obj,
+            run_buffers_obj.frame_results_list,
+            run_buffers_obj.failed_frame_thumbnails_list,
+            evidence_paths_dict["html_report"],
+        )
+    return enriched_result_obj
 
 
-def _write_report_files(
-    result_obj: VerificationResult,
+def _resolve_evidence_paths(
     run_buffers_obj: _VideoRunBuffers,
     output_path_obj: Path,
     annotated_path_obj: Path | None,
     tracking_enabled_bool: bool,
+    html_report_enabled_bool: bool,
 ) -> dict[str, Path]:
-    """Write all video evidence files."""
+    """Write tabular evidence and resolve every generated file path.
+
+    Args:
+        run_buffers_obj: Collected frame, region, and tracking evidence.
+        output_path_obj: Evidence directory for this run.
+        annotated_path_obj: Annotated video path when one was written.
+        tracking_enabled_bool: Whether temporal reports were produced.
+        html_report_enabled_bool: Whether an HTML report will be written.
+
+    Returns:
+        Named paths for every evidence file belonging to this run.
+    """
 
     evidence_paths_dict = _write_tabular_evidence(
         run_buffers_obj,
@@ -765,12 +846,15 @@ def _write_report_files(
                 output_path_obj,
             )
         )
-    evidence_paths_dict["summary_json"] = write_json_report(
-        result_obj.to_dict(),
-        output_path_obj / SUMMARY_REPORT_FILENAME_STR,
-    )
     if annotated_path_obj is not None:
         evidence_paths_dict["annotated_video"] = annotated_path_obj
+    if html_report_enabled_bool:
+        evidence_paths_dict["html_report"] = (
+            output_path_obj / HTML_REPORT_FILENAME_STR
+        )
+    evidence_paths_dict["summary_json"] = (
+        output_path_obj / SUMMARY_REPORT_FILENAME_STR
+    )
     return evidence_paths_dict
 
 
