@@ -79,6 +79,9 @@ assumption about *why* the pixels changed.
 | [Output schema](output_schema.md) | Field-by-field meaning of every report |
 | [Temporal tracking](temporal_tracking.md) | Association, lifecycle, lineage, and metrics |
 | [Verification contract](verification_contract.md) | The formal inputs and outputs |
+| [Target annotation](target_annotation.md) | Reviewed target schema and coverage behaviour |
+| [Benchmark](benchmarks.md) | Measured comparison against global-metric baselines |
+| [GitHub Action](github_action.md) | Every action input, output, and permission |
 
 ## Scope and roadmap
 
@@ -86,7 +89,6 @@ assumption about *why* the pixels changed.
 | --- | --- |
 | [Problem statement](problem_statement.md) | Why this exists and what it excludes by design |
 | [Use cases](use_cases.md) | Supported uses and unsupportable claims |
-| [Target annotation](target_annotation.md) | The planned V5.3 reviewed-target schema |
 | [Policy system](policy_system.md) | The planned V5.4 selectable policy protocol |
 
 ## Working on the code

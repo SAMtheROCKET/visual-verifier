@@ -65,8 +65,11 @@ inputs:
     default: "false"
   fail-on-gap:
     description: >-
-      Fail the job when verification completes and reports unprotected
-      frames. Set to `false` to record the evidence without gating.
+      Gate the job on a completed verification that failed. This covers
+      every policy failure, so with targets supplied it also suppresses
+      an uncovered-target failure, not only a processing gap. The name
+      predates target-aware verification and is kept for compatibility.
+      A run that could not complete still fails regardless.
     required: false
     default: "true"
   upload-evidence:
@@ -96,7 +99,10 @@ outputs:
     description: Raw exit code. `0` passed, `1` incomplete, `2` failed.
     value: ${{ steps.verify.outputs.exit-code }}
   failed-frame-count:
-    description: Number of frames without accepted processing.
+    description: >-
+      Number of frames failing the active verification policy. Without
+      targets that is frames with no accepted processing; with targets
+      it also counts frames whose required target was left uncovered.
     value: ${{ steps.verify.outputs.failed-frame-count }}
   processing-coverage-percent:
     description: Percentage of checked frames containing accepted change.

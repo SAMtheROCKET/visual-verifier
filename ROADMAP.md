@@ -29,11 +29,23 @@
 
 ## V5.4 — selectable policy system
 
+Target mode today is *target coverage in addition to* the generic
+every-frame requirement. That suits an anonymization pipeline expected
+to alter every frame, but it is a fixed combination rather than a
+choice. V5.4 makes the shape selectable:
+
 - Typed policy protocol
-- Generic-change policy
+- `generic_change_every_frame` — did anything change, everywhere
+- `target_coverage_only` — verify only the declared regions
+- `target_coverage_and_generic_change` — today's combined behaviour
+- `target_temporal_continuity` — a target must persist, not merely appear
 - Privacy-processing policy
 - Explicit temporal continuity policy
 - Stable policy configuration and serialization
+
+Renaming the action's `fail-on-gap` input belongs here too: it gates
+every policy failure, not only a processing gap, and the name should say
+so once the policies are named.
 
 ## V5.5 — batch and integration layer
 

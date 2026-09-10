@@ -368,3 +368,61 @@ def test_each_missed_frame_reports_zero_target_coverage(
 
     assert float(row_dict["covered_ratio"]) == pytest.approx(0.0)
     assert row_dict["covered"] == "False"
+
+
+def test_a_permitted_gap_is_not_reported_as_a_failure(
+    tmp_path: Path,
+) -> None:
+    """Confirm a relaxed rule does not still report its own violation.
+
+    With `expect_processing_every_frame=False` an unprocessed frame is
+    allowed. Listing it under `UNPROCESSED_FRAMES` because the frame
+    failed for a different reason would describe a policy the run was
+    not applying.
+    """
+
+    result_obj = verify_video(
+        REFERENCE_PATH,
+        PARTIAL_BLUR_PATH,
+        output_dir=tmp_path,
+        targets=DEMO_TARGETS_PATH,
+        expect_processing_every_frame=False,
+        save_annotated_video=False,
+    )
+    failure_codes_list = [
+        failure_obj.code for failure_obj in result_obj.failures
+    ]
+
+    assert result_obj.status.value == "FAIL"
+    assert failure_codes_list == ["UNCOVERED_TARGETS"]
+    assert result_obj.measurements["frames_without_processing"] == 3
+
+
+def test_targets_are_enforced_even_with_the_generic_rule_relaxed(
+    tmp_path: Path,
+) -> None:
+    """Confirm relaxing the generic half keeps target enforcement.
+
+    This is the documented way to verify only declared regions until the
+    V5.4 policy system makes the combination selectable.
+    """
+
+    without_targets_obj = verify_video(
+        REFERENCE_PATH,
+        PARTIAL_BLUR_PATH,
+        output_dir=tmp_path / "generic",
+        expect_processing_every_frame=False,
+        save_annotated_video=False,
+    )
+    with_targets_obj = verify_video(
+        REFERENCE_PATH,
+        PARTIAL_BLUR_PATH,
+        output_dir=tmp_path / "targets",
+        targets=DEMO_TARGETS_PATH,
+        expect_processing_every_frame=False,
+        save_annotated_video=False,
+    )
+
+    assert without_targets_obj.status.value == "PASS"
+    assert with_targets_obj.status.value == "FAIL"
+    assert with_targets_obj.failed_frames == EXPECTED_FAILED_FRAMES_TUPLE

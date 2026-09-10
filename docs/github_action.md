@@ -71,7 +71,7 @@ test a different version.
 | `targets` | empty | Reviewed target CSV of regions that must be anonymized |
 | `target-min-coverage` | `0.9` | Fraction of a target processing must cover |
 | `allow-uncovered-targets` | `false` | Record target coverage without gating |
-| `fail-on-gap` | `true` | Fail the job on unprotected frames |
+| `fail-on-gap` | `true` | Gate the job on any policy failure |
 | `upload-evidence` | `true` | Upload the evidence as an artifact |
 | `artifact-name` | `visual-verifier-evidence` | Artifact name |
 | `comment-on-pull-request` | `false` | Post the summary as a comment |
@@ -98,7 +98,7 @@ never needs an encoder, only the annotated evidence does.
 | --- | --- |
 | `status` | `PASS`, `FAIL`, or `ERROR` |
 | `exit-code` | `0` passed, `1` incomplete, `2` failed |
-| `failed-frame-count` | Number of unprotected frames |
+| `failed-frame-count` | Frames failing the active policy |
 | `processing-coverage-percent` | Percentage of frames with change |
 | `target-coverage-percent` | Percentage of target frames covered |
 | `uncovered-target-frame-count` | Target frames left uncovered |
@@ -127,6 +127,23 @@ Reading an output is the way to record a result without gating on it:
 Read the value through the environment rather than interpolating it into
 the script. That is the habit that keeps a step safe when the value comes
 from somewhere less trustworthy than this action.
+
+!!! note "`fail-on-gap` gates every policy failure"
+
+    The name predates target-aware verification. `fail-on-gap: "false"`
+    suppresses gating on *any* completed verification that failed, so
+    with `targets` supplied it also lets an `UNCOVERED_TARGETS` failure
+    through, not only a processing gap.
+
+    That is deliberate — it is the one switch for "record the result,
+    do not block the merge" — but the name undersells it. A clearer
+    name is planned for 1.0; `fail-on-gap` will keep working.
+
+    To suppress only target failures while still gating on processing
+    gaps, use `allow-uncovered-targets: "true"` instead.
+
+    A run that could not complete at all, such as one with an invalid
+    target file, fails the job either way.
 
 ## Commenting on a pull request
 

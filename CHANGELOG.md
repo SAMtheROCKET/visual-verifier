@@ -50,7 +50,7 @@ from 79% to 100% recall with no false alarms.
   frame processed in the wrong place
 - `target_report.csv` with one row per target per frame, and
   `measurements.targets` in `summary.json`
-- A  section in the console summary, printed only when
+- A `Target coverage` section in the console summary, printed only when
   targets were supplied
 - Target overlays on the annotated video, coloured by coverage verdict
   and prefixed with `~` when the box was interpolated
@@ -60,9 +60,10 @@ from 79% to 100% recall with no false alarms.
 - A `Visual Verifier + targets` row in the Anonymization Gap Benchmark,
   labelled as not a like-for-like comparison because it receives
   information no baseline is given
-- 58 target regressions across `tests/test_targets.py` and
-  `tests/test_target_verification.py`, including one asserting that
-  supplying no targets leaves every previous result identical
+- Comprehensive target regressions across loading, coverage,
+  interpolation, end-to-end verification, and media-aware validation,
+  including one asserting that supplying no targets leaves every
+  previous result identical
 - `targets/validation.py`, which checks every target against the
   reference media before a frame is read and again after the run, and
   `tests/test_target_media_validation.py` covering it
@@ -101,6 +102,11 @@ from 79% to 100% recall with no false alarms.
   processing *and* an uncovered target reported only
   `UNCOVERED_TARGETS`. Both codes are now reported independently, which
   is the distinction target-aware verification exists to make
+- **A permitted gap was still reported as a failure.** With
+  `expect_processing_every_frame=False` an unprocessed frame is allowed,
+  but a frame failing for a target reason still listed it under
+  `UNPROCESSED_FRAMES`, describing a policy the run was not applying.
+  The measurement still counts those frames; only the failure is gated
 - **The HTML report described every failing frame as "no processing
   detected"**, including frames where processing was detected and only
   the required region was missed, and carried the generic-policy caveat

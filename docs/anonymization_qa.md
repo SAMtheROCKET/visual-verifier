@@ -131,4 +131,4 @@ does not signal to anyone that it exists.
 
 - [Limitations](limitations.md) — every known failure mode
 - [Use cases](use_cases.md) — supported uses and unsupportable claims
-- [Target annotation](target_annotation.md) — the planned V5.3 schema
+- [Target annotation](target_annotation.md) — reviewed target schema and coverage behaviour

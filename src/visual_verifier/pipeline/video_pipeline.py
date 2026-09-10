@@ -317,6 +317,7 @@ class VideoVerificationPipeline:
             self._tracking_config_obj,
             bool(run_context_obj.targets_tuple),
             self._target_config_obj,
+            self._expect_processing_every_frame_bool,
         )
         return _write_optional_evidence(
             result_obj,
@@ -758,6 +759,7 @@ def _build_result_from_context(
     tracking_config_obj: TrackingConfig,
     targets_enabled_bool: bool = False,
     target_config_obj: TargetConfig = DEFAULT_TARGET_CONFIG,
+    expect_processing_every_frame_bool: bool = True,
 ) -> VerificationResult:
     """Build the final typed video-verification result."""
 
@@ -772,7 +774,11 @@ def _build_result_from_context(
         reference_path=run_context_obj.reference_path_obj,
         candidate_path=run_context_obj.candidate_path_obj,
         policy_name=policy_name_str,
-        failures=_build_failures(failed_frames_tuple, run_buffers_obj),
+        failures=_build_failures(
+            failed_frames_tuple,
+            run_buffers_obj,
+            expect_processing_every_frame_bool,
+        ),
         failed_frames=failed_frames_tuple,
         measurements=_build_measurements(
             run_context_obj.reference_metadata_obj,
@@ -852,12 +858,18 @@ def _build_region_row(
 def _build_failures(
     failed_frames_tuple: tuple[int, ...],
     run_buffers_obj: _VideoRunBuffers,
+    expect_processing_every_frame_bool: bool = True,
 ) -> tuple[VerificationFailure, ...]:
     """Build the top-level failure tuple.
 
     Args:
         failed_frames_tuple: Every frame that failed for any reason.
         run_buffers_obj: Collected evidence, read for target failures.
+        expect_processing_every_frame_bool: Whether the generic
+            every-frame rule was active. When it was relaxed, an
+            unprocessed frame is permitted and must not be reported
+            as a failure even if the frame failed for another
+            reason.
 
     Returns:
         One failure per distinct reason, so a report can say whether a
@@ -868,7 +880,9 @@ def _build_failures(
     if not failed_frames_tuple:
         return ()
 
-    unprocessed_list = sorted(set(run_buffers_obj.unprocessed_frames_list))
+    unprocessed_list: list[int] = []
+    if expect_processing_every_frame_bool:
+        unprocessed_list = sorted(set(run_buffers_obj.unprocessed_frames_list))
 
     failures_list: list[VerificationFailure] = []
     if unprocessed_list:
