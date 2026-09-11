@@ -1,3 +1,12 @@
+---
+title: Anonymization QA for Images & Videos
+description: >-
+  Verify that blur, redaction, and masking actually happened, frame by
+  frame. Visual Verifier is the independent test that runs after your
+  anonymization pipeline: deterministic PASS/FAIL, reviewed target
+  coverage, temporal evidence, and CI-ready exit codes. Runs locally.
+---
+
 # Visual Verifier
 
 ## Anonymization QA for images and videos
@@ -60,6 +69,53 @@ way.
 Privacy work is where the failure is most expensive, so it is what the
 documentation leads with. The verification contract itself makes no
 assumption about *why* the pixels changed.
+
+## The missing test after visual processing
+
+Image and video pipelines are usually tested as software: the function
+ran, the model returned detections, the encoder produced a file, and the
+job exited successfully.
+
+None of that proves the output media is correct.
+
+An anonymizer can complete successfully while missing one frame. A
+masking pipeline can modify the frame while missing the required face or
+licence plate. A watermark job can finish while the mark disappears
+during part of a video. In every case the exit code is zero and the
+media is wrong.
+
+**Visual Verifier tests the produced media itself.** It is not an
+anonymizer; it is the independent test that runs after one:
+
+```text
+any anonymizer, redactor, or image/video processor
+                      ↓
+               processed output
+                      ↓
+              VISUAL VERIFIER
+                      ↓
+        Did the transformation happen?
+        Did it happen in every frame?
+        Did it cover the required target?
+        Where exactly did it fail?
+                      ↓
+           PASS / FAIL + evidence
+                      ↓
+             fix → rerun → verify
+```
+
+Instead of asking only whether the software executed, it asks whether
+the expected visual transformation actually appeared, frame by frame,
+and — when reviewed targets are supplied — in the required region.
+
+Think of it as regression testing for processed visual media:
+deterministic PASS/FAIL, the exact failing frames and regions,
+reviewable evidence, and CI-ready exit codes.
+
+> **Your code has tests. Why shouldn't your processed media?**
+
+That also means tools like face blurrers, plate redactors, and OCR
+scrubbers are not competitors. They are upstream systems this verifies.
 
 ## Start here
 

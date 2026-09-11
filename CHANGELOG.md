@@ -4,6 +4,30 @@ All notable changes to Visual Verifier are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- A `The missing test after visual processing` section in both README
+  surfaces, stating the category rather than only the feature set:
+  most tools transform visual media, this one independently tests
+  whether the transformation happened, where and when it was required.
+  Face blurrers and plate redactors are upstream systems it verifies,
+  not competitors
+- `docs/llms.txt`, an agent-readable project summary and documentation
+  index following the emerging convention
+- `docs/robots.txt`, pointing crawlers at the generated sitemap
+- Open Graph and Twitter card metadata via a theme override, so a
+  shared link renders as a preview rather than a bare URL. Every value
+  is a meta tag and the image is served from the site's own origin, so
+  the no-third-party-resource guarantee is unchanged
+- `scripts/generate_social_card.py`, rendering the 1200x630 preview from
+  the bundled fixture rather than by hand, so the plate it shows blurred
+  and the plate it shows readable are the frames the demo verifies
+- A descriptive home-page title, `Anonymization QA for Images & Videos`,
+  in place of a bare product name
+- `tests/test_discoverability.py`, covering the sitemap reference, the
+  agent index and its links, the card dimensions, the metadata block,
+  and the category statement
+
 ### Planned
 
 - Selectable policy system with a typed policy protocol

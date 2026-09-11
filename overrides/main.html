@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{#
+  Social and agent metadata.
+
+  Every value here is a meta tag, never a fetched resource, so the site
+  keeps its guarantee of loading nothing from a third party. The card
+  image is served from this site's own origin.
+
+  `page` is undefined while MkDocs renders theme templates such as
+  404.html, so every access to it is guarded.
+#}
+{% block extrahead %}
+  {% set fallback_title = "Visual Verifier — Anonymization QA for Images & Videos" %}
+
+  {% set ns = namespace(title=fallback_title, description=config.site_description, url=config.site_url) %}
+  {% if page %}
+    {% if page.meta and page.meta.title %}
+      {% set ns.title = page.meta.title ~ " — " ~ config.site_name %}
+    {% elif page.title %}
+      {% set ns.title = page.title ~ " — " ~ config.site_name %}
+    {% endif %}
+    {% if page.meta and page.meta.description %}
+      {% set ns.description = page.meta.description %}
+    {% endif %}
+    {% if page.canonical_url %}
+      {% set ns.url = page.canonical_url %}
+    {% endif %}
+  {% endif %}
+
+  {% set social_description = ns.description | striptags | trim %}
+  {% set social_image = config.site_url ~ "assets/social_card.png" %}
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ ns.title }}">
+  <meta property="og:description" content="{{ social_description }}">
+  <meta property="og:image" content="{{ social_image }}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Visual Verifier: the same licence plate one frame apart, blurred and passing, then readable and failing">
+  <meta property="og:url" content="{{ ns.url }}">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ ns.title }}">
+  <meta name="twitter:description" content="{{ social_description }}">
+  <meta name="twitter:image" content="{{ social_image }}">
+  <meta name="twitter:image:alt" content="Visual Verifier: a licence plate blurred and passing, then readable and failing">
+{% endblock %}

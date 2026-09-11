@@ -28,6 +28,10 @@
 - README assets regenerated with
   `uv run --with pillow python scripts/generate_readme_assets.py` and the
   PASS/FAIL frames they show still match the demo contract
+- Social card regenerated with
+  `uv run --with pillow python scripts/generate_social_card.py`. It is
+  rendered from the bundled fixture, so a changed demo contract changes
+  the card; `tests/test_discoverability.py` checks it stays 1200x630
 - README image links stay **relative** in the repository, so an editor
   preview and GitHub's repository view render them. The release workflow
   runs `scripts/build_pypi_readme.py --ref <tag>` before building,

@@ -1,0 +1,7 @@
+# Visual Verifier documentation
+# https://samtherocket.github.io/visual-verifier/
+
+User-agent: *
+Allow: /
+
+Sitemap: https://samtherocket.github.io/visual-verifier/sitemap.xml

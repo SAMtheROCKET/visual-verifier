@@ -1,0 +1,59 @@
+# Visual Verifier
+
+> Open-source anonymization QA for images and videos. Visual Verifier
+> verifies blur, redaction, masking, and other visual processing frame by
+> frame using deterministic PASS/FAIL, reviewed target coverage, temporal
+> evidence, and CI-ready reports.
+
+Visual Verifier is a local Python package and command-line tool. Media is
+processed on the machine that runs it and is never uploaded; the package
+has no networking dependency, and a test enforces that on every commit.
+
+It is not an anonymizer. It is the independent test that runs after one.
+Most tools transform visual media; Visual Verifier tests whether the
+transformation actually happened, where and when it was required.
+
+A pipeline can exit successfully while missing a single frame, or while
+changing the frame but not the face or licence plate that mattered.
+Visual Verifier compares reference and processed media frame by frame,
+and when reviewed targets are supplied it checks those specific regions.
+
+## Start here
+
+- [Documentation](https://samtherocket.github.io/visual-verifier/): Product overview and quick start
+- [Getting started](https://samtherocket.github.io/visual-verifier/getting_started/): Install and run the deterministic demo with no clone
+- [Anonymization QA](https://samtherocket.github.io/visual-verifier/anonymization_qa/): Verification semantics and honest limitations
+- [Target annotation](https://samtherocket.github.io/visual-verifier/target_annotation/): Verify required faces, plates, or custom regions
+- [Verification contract](https://samtherocket.github.io/visual-verifier/verification_contract/): What PASS and FAIL formally mean in each mode
+- [GitHub Action](https://samtherocket.github.io/visual-verifier/github_action/): Use Visual Verifier as a CI quality gate
+- [Use it in CI](https://samtherocket.github.io/visual-verifier/ci/): Exit codes and pipeline integration
+- [Benchmark](https://samtherocket.github.io/visual-verifier/benchmarks/): Reproducible anonymization-gap benchmark against global metrics
+- [Command line](https://samtherocket.github.io/visual-verifier/cli/): Every command, option, and exit code
+- [Python API](https://samtherocket.github.io/visual-verifier/python_api/): Typed programmatic interface
+- [Output schema](https://samtherocket.github.io/visual-verifier/output_schema/): Field-by-field meaning of every report
+- [Temporal tracking](https://samtherocket.github.io/visual-verifier/temporal_tracking/): Association, lifecycle, and continuity metrics
+- [Limitations](https://samtherocket.github.io/visual-verifier/limitations/): What a PASS does and does not prove
+
+## Install and try
+
+```
+pip install visual-verifier
+visual-verifier demo
+```
+
+The demo synthesizes a short clip locally in which a licence plate is
+blurred on every frame except three, verifies it, and reports
+`FAIL` with frames 4, 8, and 12. Nothing is downloaded.
+
+## Exit codes
+
+- `0`: verification completed and passed
+- `1`: verification could not be completed
+- `2`: verification completed and failed
+
+## Project
+
+- [GitHub repository](https://github.com/SAMtheROCKET/visual-verifier)
+- [PyPI package](https://pypi.org/project/visual-verifier/)
+- [Release notes](https://github.com/SAMtheROCKET/visual-verifier/releases)
+- [Changelog](https://github.com/SAMtheROCKET/visual-verifier/blob/main/CHANGELOG.md)
