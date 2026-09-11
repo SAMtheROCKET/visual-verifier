@@ -4,6 +4,8 @@ Add anonymization QA to a pull request in three lines. The action
 installs Visual Verifier, runs the comparison, publishes a job summary
 naming the failing frames, and uploads the evidence.
 
+Published on the [GitHub Marketplace](https://github.com/marketplace/actions/visual-verifier).
+
 ```yaml
 - name: Verify anonymization coverage
   uses: SAMtheROCKET/visual-verifier@v0.3.0

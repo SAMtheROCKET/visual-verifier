@@ -193,3 +193,45 @@ def test_the_category_statement_is_stated_prominently() -> None:
             readme_path_obj.name
         )
         assert "not an anonymizer" in readme_text, readme_path_obj.name
+
+
+MARKETPLACE_URL_TEXT = "https://github.com/marketplace/actions/visual-verifier"
+
+
+@pytest.mark.parametrize(
+    "relative_path_str",
+    [
+        "README.md",
+        "docs/github_action.md",
+        "docs/ci.md",
+        "docs/llms.txt",
+    ],
+)
+def test_the_marketplace_listing_is_linked(relative_path_str: str) -> None:
+    """Confirm every surface that mentions the action points at its listing.
+
+    The Marketplace is a discovery surface of its own and a trust signal
+    for a CI action. A listing nothing links to is one nobody finds.
+    """
+
+    file_text = (REPOSITORY_ROOT_PATH / relative_path_str).read_text(
+        encoding="utf-8"
+    )
+
+    assert MARKETPLACE_URL_TEXT in file_text
+
+
+def test_the_action_declares_marketplace_branding() -> None:
+    """Confirm the listing has an icon and colour rather than defaults.
+
+    GitHub requires branding for a Marketplace listing, and a missing
+    icon is only visible once the listing is already public.
+    """
+
+    action_text = (REPOSITORY_ROOT_PATH / "action.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "branding:" in action_text
+    assert "icon:" in action_text
+    assert "color:" in action_text

@@ -55,5 +55,6 @@ blurred on every frame except three, verifies it, and reports
 
 - [GitHub repository](https://github.com/SAMtheROCKET/visual-verifier)
 - [PyPI package](https://pypi.org/project/visual-verifier/)
+- [GitHub Marketplace action](https://github.com/marketplace/actions/visual-verifier)
 - [Release notes](https://github.com/SAMtheROCKET/visual-verifier/releases)
 - [Changelog](https://github.com/SAMtheROCKET/visual-verifier/blob/main/CHANGELOG.md)

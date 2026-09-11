@@ -28,7 +28,8 @@ On GitHub the bundled action is three lines:
 
 It installs the tool, runs the comparison, publishes a job summary naming
 the failing frames, uploads the evidence, and can keep one updated
-pull-request comment. Every input and output is documented on the
+pull-request comment. It is listed on the
+[GitHub Marketplace](https://github.com/marketplace/actions/visual-verifier). Every input and output is documented on the
 [GitHub Action](github_action.md) page.
 
 ## GitHub Actions without the action

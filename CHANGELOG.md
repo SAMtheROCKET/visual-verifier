@@ -53,6 +53,9 @@ All notable changes to Visual Verifier are documented here.
   version bump to it would previously have been first exercised during a
   real release
 
+- The action is published on the GitHub Marketplace, and the README,
+  CI page, action page, and agent index all link to the listing
+
 ### Planned
 
 - Selectable policy system with a typed policy protocol

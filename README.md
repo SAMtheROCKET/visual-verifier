@@ -2,6 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/visual-verifier)](https://pypi.org/project/visual-verifier/)
 [![Docs](https://img.shields.io/badge/docs-samtherocket.github.io-teal)](https://samtherocket.github.io/visual-verifier/)
+[![GitHub Marketplace](https://img.shields.io/badge/marketplace-Visual%20Verifier-2ea44f?logo=github)](https://github.com/marketplace/actions/visual-verifier)
 [![Quality](https://github.com/SAMtheROCKET/visual-verifier/actions/workflows/quality.yml/badge.svg)](https://github.com/SAMtheROCKET/visual-verifier/actions/workflows/quality.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
@@ -251,8 +252,9 @@ threshold.
 
 > **Your pipeline passed. Did the pixels?**
 
-On GitHub, the bundled action installs the tool, runs the comparison,
-writes a job summary, and uploads the evidence:
+On GitHub, the bundled action — available on the
+[GitHub Marketplace](https://github.com/marketplace/actions/visual-verifier) — installs the tool, runs the
+comparison, writes a job summary, and uploads the evidence:
 
 ```yaml
 - name: Verify anonymization coverage
