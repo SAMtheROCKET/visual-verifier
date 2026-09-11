@@ -1,7 +1,7 @@
 name: Visual Verifier
 description: >-
-  Verify that blur, redaction, or masking covers every frame, and publish
-  the PASS/FAIL evidence as a job summary and a downloadable artifact.
+  Test blur, redaction, masking, and anonymization frame by frame with
+  deterministic PASS/FAIL evidence for CI.
 author: Sambit Supriya Dash
 
 branding:
