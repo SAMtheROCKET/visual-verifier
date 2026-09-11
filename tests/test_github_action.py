@@ -29,10 +29,12 @@ DECLARED_NAME_PATTERN = re.compile(r"^ {2}([a-z][a-z0-9-]*):$")
 DOCUMENTED_FIELD_PATTERN = re.compile(r"^\| `([a-z][a-z0-9-]*)`", re.MULTILINE)
 ACTION_REFERENCE_PATTERN = re.compile(r"SAMtheROCKET/visual-verifier@(\S+)")
 REQUIRED_INPUTS_FROZENSET = frozenset({"reference", "candidate"})
+PYPI_README_PATH = REPOSITORY_ROOT_PATH / "PYPI_README.md"
 DOCUMENTED_PAGE_PATHS_TUPLE = (
     CI_PAGE_PATH,
     ACTION_PAGE_PATH,
     README_PATH,
+    PYPI_README_PATH,
 )
 
 MANIFEST_TEXT = ACTION_MANIFEST_PATH.read_text(encoding="utf-8")

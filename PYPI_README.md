@@ -27,6 +27,13 @@ FAIL
 Frames missed: 4, 8, 12
 ```
 
+Or drop it straight into GitHub Actions —
+[on the Marketplace](https://github.com/marketplace/actions/visual-verifier):
+
+```yaml
+uses: SAMtheROCKET/visual-verifier@v0.3.0
+```
+
 ---
 
 ## Why

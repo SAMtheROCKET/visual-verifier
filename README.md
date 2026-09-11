@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/visual-verifier)](https://pypi.org/project/visual-verifier/)
 [![Docs](https://img.shields.io/badge/docs-samtherocket.github.io-teal)](https://samtherocket.github.io/visual-verifier/)
-[![GitHub Marketplace](https://img.shields.io/badge/marketplace-Visual%20Verifier-2ea44f?logo=github)](https://github.com/marketplace/actions/visual-verifier)
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Visual%20Verifier-blue?logo=github)](https://github.com/marketplace/actions/visual-verifier)
 [![Quality](https://github.com/SAMtheROCKET/visual-verifier/actions/workflows/quality.yml/badge.svg)](https://github.com/SAMtheROCKET/visual-verifier/actions/workflows/quality.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
@@ -196,7 +196,9 @@ the same thing in ten seconds.
 
 ## Install
 
-Requires Python 3.10 or newer.
+Two ways in, depending on where you want the check to run.
+
+**Python / CLI** — requires Python 3.10 or newer.
 
 ```bash
 pip install visual-verifier
@@ -208,6 +210,12 @@ Or with `uv`:
 ```bash
 uv tool install visual-verifier      # as a standalone CLI
 uv add visual-verifier               # as a project dependency
+```
+
+**GitHub Actions** — no install step, straight into a workflow.
+
+```yaml
+uses: SAMtheROCKET/visual-verifier@v0.3.0
 ```
 
 To work on Visual Verifier itself, clone and run `uv sync`. On Windows
@@ -263,6 +271,10 @@ comparison, writes a job summary, and uploads the evidence:
     reference: fixtures/source.mp4
     candidate: build/anonymized.mp4
 ```
+
+Also available on
+[GitHub Marketplace](https://github.com/marketplace/actions/visual-verifier)
+as a reusable Action.
 
 The summary names the failing frames, draws a frame timeline, and links
 the evidence artifact, so a reviewer sees the answer without downloading
