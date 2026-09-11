@@ -75,6 +75,21 @@ jobs:
           path: coverage.xml
           retention-days: 14
 
+      # download-artifact is used only by the release workflow, which
+      # runs on a tag and so never on a pull request. Without this the
+      # first exercise of a major version bump would be a real release.
+      - name: Exercise the artifact round trip the release depends on
+        uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: round-trip-check/
+
+      - name: Confirm the downloaded distributions are intact
+        run: |
+          test -f round-trip-check/*.whl
+          test -f round-trip-check/*.tar.gz
+          uv run --with twine twine check --strict round-trip-check/*
+
   compatibility:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest

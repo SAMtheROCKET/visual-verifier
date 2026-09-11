@@ -118,6 +118,41 @@ target that was never fully covered.
 A rejected region never contributes. Processing that failed detection
 filtering did not happen as far as the verdict is concerned.
 
+## How precisely must a box be drawn?
+
+A reviewer draws a box with margin around the object. A generated box is
+exact. That difference matters, because coverage is a ratio: grow the box
+and the same blur covers a smaller fraction of it.
+
+Measured on the benchmark fixtures at the default
+`--target-min-coverage 0.9`, growing every box symmetrically:
+
+| Box drawn larger than the object | Correctly anonymized frames failing |
+| ---: | ---: |
+| up to 40% | none |
+| 45% and beyond | all of them |
+
+The cliff is sharp rather than gradual, and that is worth understanding.
+Coverage is one ratio per target, so every frame crosses the threshold at
+the same moment. You do not get a warning band; a slightly-too-loose
+convention fails an entire run at once.
+
+Practically:
+
+- **Draw within about a third of the object's size** and the default
+  threshold has room to spare.
+- **If your review convention is looser than that**, lower
+  `--target-min-coverage` rather than redrawing. A box drawn at twice the
+  object's size needs roughly `0.25`.
+- **A sudden all-frames failure after a review-tool change** is more
+  likely a box convention change than a pipeline regression. Check
+  `covered_ratio` in `target_report.csv`: a consistent value just under
+  the threshold points at the boxes, not the blur.
+
+These numbers come from synthetic fixtures where the blur is applied with
+fixed padding. Real footage will shift them, so treat 40% as an
+indication rather than a specification.
+
 ## Interpolation
 
 Reviewers rarely annotate every frame. Boxes between two reviewed
@@ -195,6 +230,31 @@ a region that was never sensitive.
 
 If you feed a detector's output in, keep `source` set to `detector` so
 every report says so.
+
+## First run on real footage
+
+The benchmark uses synthetic clips with exact boxes and a JPEG-style
+re-encode. Real footage differs in three ways that change what you
+should expect, and none of them is a defect:
+
+**Your boxes will be looser than the generated ones.** See the section
+above; `--target-min-coverage` is the knob, not the box.
+
+**Real codecs are not a JPEG round trip.** H.264 spreads motion
+artefacts across a frame in ways a still-image re-encode does not. If a
+clean pipeline reports scattered failures, raise `--diff-threshold`
+before suspecting the anonymizer.
+
+**The severity default is deliberately permissive.** `--min-severity`
+defaults to `8.0`, which accepts a blur too light to anonymize. The
+benchmark measures `50` catching every weak-blur case with no new false
+alarms. If you know your pipeline applies a strong blur, raise it; if
+your pipeline uses light pixelation, leave it low and rely on targets.
+
+A useful first run is deliberately boring: verify media you already
+believe is correct, confirm `PASS`, and only then point it at a
+suspected failure. A tool that fails on your known-good footage is
+telling you about its thresholds, not your pipeline.
 
 ## Honest limits
 

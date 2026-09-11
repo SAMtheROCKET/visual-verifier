@@ -20,6 +20,12 @@ reports.
 package has no network dependency at all, and
 [a test enforces it](tests/test_local_execution.py) on every commit.
 
+> **Visual Verifier brings software-testing discipline to processed image
+> and video output.** Instead of trusting that an anonymization or
+> visual-processing job completed, it independently checks what happened
+> frame by frame, verifies required regions when targets are supplied,
+> and produces reproducible PASS/FAIL evidence for CI and review.
+
 ```bash
 pip install visual-verifier
 visual-verifier demo

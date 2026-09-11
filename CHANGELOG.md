@@ -28,6 +28,31 @@ All notable changes to Visual Verifier are documented here.
   agent index and its links, the card dimensions, the metadata block,
   and the category statement
 
+- The frozen positioning statement in both README surfaces: Visual
+  Verifier brings software-testing discipline to processed image and
+  video output, rather than trusting that a job completed
+- `PYPI_README.md`, a compact project page for PyPI. The repository
+  README stays long on purpose; at 21,000 characters it buried the
+  install command several screens down on PyPI. The packaged page is
+  3,300. `scripts/build_pypi_readme.py` now reads the packaged readme
+  from `pyproject.toml`, so the rewriter cannot target a different file
+  from the one PyPI renders
+- A closing verdict card on the demonstration GIF, so the animation ends
+  on `FAIL` and the missed frame numbers rather than stopping mid-run.
+  Every number on it is derived from the verification that produced the
+  animation
+- A measured answer to how precisely a reviewed target must be drawn.
+  Boxes up to 40% larger than the object pass at the default coverage
+  threshold; at 45% every correctly anonymized frame fails at once,
+  because coverage is one ratio per target and crosses together
+- First-run guidance for real footage, covering looser boxes, codec
+  artefacts against the benchmark's JPEG round trip, and the deliberately
+  permissive severity default
+- A CI step exercising `actions/download-artifact`, which is used only by
+  the release workflow and so was never run on a pull request. A major
+  version bump to it would previously have been first exercised during a
+  real release
+
 ### Planned
 
 - Selectable policy system with a typed policy protocol

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "visual-verifier"
 dynamic = ["version"]
 description = "Anonymization QA for images and videos. Verify blur, redaction, and masking frame by frame."
-readme = "README.md"
+readme = "PYPI_README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]

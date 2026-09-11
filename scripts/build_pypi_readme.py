@@ -23,7 +23,35 @@ import sys
 from pathlib import Path
 
 REPOSITORY_ROOT_PATH = Path(__file__).resolve().parents[1]
-README_PATH = REPOSITORY_ROOT_PATH / "README.md"
+PYPROJECT_PATH = REPOSITORY_ROOT_PATH / "pyproject.toml"
+README_DECLARATION_PATTERN = re.compile(
+    r'^readme\s*=\s*"([^"]+)"', re.MULTILINE
+)
+
+
+def packaged_readme_path() -> Path:
+    """Return the README that packaging actually ships.
+
+    Reading it from ``pyproject.toml`` rather than hard-coding a name
+    means the rewriter cannot target a different file from the one PyPI
+    renders.
+
+    Returns:
+        Path to the declared readme.
+
+    Raises:
+        RuntimeError: When no readme is declared.
+    """
+
+    match_obj = README_DECLARATION_PATTERN.search(
+        PYPROJECT_PATH.read_text(encoding="utf-8")
+    )
+    if match_obj is None:
+        raise RuntimeError("pyproject.toml declares no readme")
+    return REPOSITORY_ROOT_PATH / match_obj.group(1)
+
+
+README_PATH = packaged_readme_path()
 RAW_URL_PREFIX_TEXT = (
     "https://raw.githubusercontent.com/SAMtheROCKET/visual-verifier"
 )

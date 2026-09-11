@@ -18,6 +18,12 @@ Visual Verifier tests blur, redaction, masking, and other visual processing
 frame by frame, and returns a deterministic PASS/FAIL, temporal evidence,
 and CI-ready reports.
 
+> **Visual Verifier brings software-testing discipline to processed image
+> and video output.** Instead of trusting that an anonymization or
+> visual-processing job completed, it independently checks what happened
+> frame by frame, verifies required regions when targets are supplied,
+> and produces reproducible PASS/FAIL evidence for CI and review.
+
 <p align="center">
   <img src="assets/pass_fail_comparison.png"
        alt="The same licence plate one frame apart: frame 3 blurred and passing, frame 4 readable and failing"

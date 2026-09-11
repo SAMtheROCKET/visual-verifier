@@ -22,6 +22,8 @@ import pytest
 
 REPOSITORY_ROOT_PATH = Path(__file__).resolve().parents[1]
 README_PATH = REPOSITORY_ROOT_PATH / "README.md"
+PYPI_README_PATH = REPOSITORY_ROOT_PATH / "PYPI_README.md"
+PYPROJECT_PATH = REPOSITORY_ROOT_PATH / "pyproject.toml"
 BUILDER_SCRIPT_PATH = REPOSITORY_ROOT_PATH / "scripts" / "build_pypi_readme.py"
 RELEASE_WORKFLOW_PATH = (
     REPOSITORY_ROOT_PATH / ".github" / "workflows" / "release.yml"
@@ -148,3 +150,82 @@ def test_the_release_workflow_runs_the_conversion() -> None:
     assert conversion_index < build_index, (
         "the conversion must run before the distributions are built"
     )
+
+
+def test_the_packaged_readme_is_the_compact_one() -> None:
+    """Confirm PyPI ships the short page, not the full repository README.
+
+    The repository README is long on purpose. A PyPI project page that
+    long buries the install command below several screens of detail.
+    """
+
+    pyproject_text = PYPROJECT_PATH.read_text(encoding="utf-8")
+
+    assert 'readme = "PYPI_README.md"' in pyproject_text
+    assert PYPI_README_PATH.is_file()
+    assert len(PYPI_README_PATH.read_text(encoding="utf-8")) < len(
+        README_PATH.read_text(encoding="utf-8")
+    )
+
+
+def test_the_rewriter_targets_whatever_packaging_ships() -> None:
+    """Confirm the rewriter follows pyproject rather than a fixed name.
+
+    If the two ever disagree, the release would build a page whose image
+    links were never converted, and PyPI would show broken images.
+    """
+
+    assert BUILDER_MODULE.README_PATH.name == "PYPI_README.md"
+
+
+@pytest.mark.parametrize(
+    "readme_path_obj",
+    [README_PATH, PYPI_README_PATH],
+    ids=lambda path_obj: path_obj.name,
+)
+def test_both_readmes_keep_relative_asset_links(
+    readme_path_obj: Path,
+) -> None:
+    """Confirm neither README hard-codes an absolute asset URL.
+
+    An absolute URL renders nothing until that exact ref exists on the
+    remote, which breaks editor previews and fresh clones.
+    """
+
+    readme_text = readme_path_obj.read_text(encoding="utf-8")
+
+    assert not ABSOLUTE_ASSET_PATTERN.findall(readme_text)
+
+
+@pytest.mark.parametrize(
+    "readme_path_obj",
+    [README_PATH, PYPI_README_PATH],
+    ids=lambda path_obj: path_obj.name,
+)
+def test_both_readmes_link_only_to_existing_assets(
+    readme_path_obj: Path,
+) -> None:
+    """Confirm every image in either README resolves on disk."""
+
+    readme_text = readme_path_obj.read_text(encoding="utf-8")
+
+    for relative_link_str in BUILDER_MODULE.find_relative_asset_links(
+        readme_text
+    ):
+        assert (REPOSITORY_ROOT_PATH / relative_link_str).is_file(), (
+            relative_link_str
+        )
+
+
+def test_the_packaged_readme_states_the_honest_scope() -> None:
+    """Confirm compressing the page did not drop the caveat.
+
+    The shortest surface is the one most likely to lose the limits, and
+    the one most people read.
+    """
+
+    pypi_text = " ".join(PYPI_README_PATH.read_text(encoding="utf-8").split())
+
+    assert "not a certificate of anonymization" in pypi_text
+    assert "Coverage is geometric" in pypi_text
+    assert "not an anonymizer" in pypi_text

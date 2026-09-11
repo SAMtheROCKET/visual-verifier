@@ -54,6 +54,9 @@ COMPARISON_FOOTER_HEIGHT_INT = 36
 PASS_FRAME_DURATION_MS = 520
 FAIL_FRAME_DURATION_MS = 1100
 GIF_PALETTE_SIZE_INT = 96
+VERDICT_DURATION_MS = 2600
+VERDICT_TITLE_TEXT = "FAIL"
+VERDICT_FOOTER_TEXT = "pip install visual-verifier"
 
 
 def main() -> int:
@@ -461,6 +464,114 @@ def _magnified_crop(
     return resized_crop_ndarray
 
 
+def _build_verdict_panel(
+    panel_height_int: int,
+    failed_frames_frozenset: frozenset[int],
+    total_frames_int: int,
+) -> ImageArray:
+    """Render the closing verdict card for the demonstration GIF.
+
+    Every number on the card is derived from the run that produced the
+    animation, so the card cannot disagree with the demo contract it
+    illustrates.
+
+    Args:
+        panel_height_int: Height of the animation's other panels.
+        failed_frames_frozenset: Frames the run reported as unprotected.
+        total_frames_int: Frames compared in the run.
+
+    Returns:
+        One panel stating the result the animation just demonstrated.
+    """
+
+    panel_ndarray: ImageArray = np.full(
+        (panel_height_int, PANEL_WIDTH_INT, 3),
+        BACKGROUND_COLOR_BGR,
+        dtype=np.uint8,
+    )
+    lines_tuple = _verdict_lines(failed_frames_frozenset, total_frames_int)
+    for (
+        text_str,
+        scale_float,
+        thickness_int,
+        color_bgr,
+        y_ratio,
+    ) in lines_tuple:
+        _put_centered_text(
+            panel_ndarray,
+            text_str,
+            int(panel_height_int * y_ratio),
+            scale_float,
+            thickness_int,
+            color_bgr,
+        )
+    return panel_ndarray
+
+
+def _verdict_lines(
+    failed_frames_frozenset: frozenset[int],
+    total_frames_int: int,
+) -> tuple[tuple[str, float, int, tuple[int, int, int], float], ...]:
+    """Return the verdict card's lines with their type styling.
+
+    Args:
+        failed_frames_frozenset: Frames reported as unprotected.
+        total_frames_int: Frames compared in the run.
+
+    Returns:
+        Text, font scale, thickness, colour, and vertical position for
+        each line.
+    """
+
+    failed_text = ", ".join(
+        str(frame_int) for frame_int in sorted(failed_frames_frozenset)
+    )
+    caption_text = (
+        f"{len(failed_frames_frozenset)} of {total_frames_int} frames "
+        "were never anonymized"
+    )
+    return (
+        (VERDICT_TITLE_TEXT, 1.9, 3, FAIL_COLOR_BGR, 0.36),
+        (f"Frames missed: {failed_text}", 0.78, 2, TEXT_COLOR_BGR, 0.50),
+        (caption_text, 0.56, 1, MUTED_TEXT_COLOR_BGR, 0.60),
+        (VERDICT_FOOTER_TEXT, 0.62, 1, MUTED_TEXT_COLOR_BGR, 0.78),
+    )
+
+
+def _put_centered_text(
+    panel_ndarray: ImageArray,
+    text_str: str,
+    baseline_y_int: int,
+    scale_float: float,
+    thickness_int: int,
+    color_bgr: tuple[int, int, int],
+) -> None:
+    """Draw one horizontally centred line of text.
+
+    Args:
+        panel_ndarray: Panel modified in place.
+        text_str: Line to draw.
+        baseline_y_int: Text baseline in pixels.
+        scale_float: Font scale.
+        thickness_int: Stroke thickness.
+        color_bgr: Text colour.
+    """
+
+    (text_width_int, _), _ = cv2.getTextSize(
+        text_str, FONT_FACE, scale_float, thickness_int
+    )
+    cv2.putText(
+        panel_ndarray,
+        text_str,
+        ((PANEL_WIDTH_INT - text_width_int) // 2, baseline_y_int),
+        FONT_FACE,
+        scale_float,
+        color_bgr,
+        thickness_int,
+        cv2.LINE_AA,
+    )
+
+
 def _write_gif(
     image_module: object,
     panels_list: list[ImageArray],
@@ -480,6 +591,18 @@ def _write_gif(
         else PASS_FRAME_DURATION_MS
         for frame_number_int in range(1, len(panels_list) + 1)
     ]
+
+    # The run ends on its verdict, so the loop reads as a complete story
+    # rather than stopping mid-sequence.
+    verdict_panel_ndarray = _build_verdict_panel(
+        panels_list[0].shape[0], failed_frames_frozenset, len(panels_list)
+    )
+    pil_frames_list.append(
+        image_module.fromarray(  # type: ignore[attr-defined]
+            cv2.cvtColor(verdict_panel_ndarray, cv2.COLOR_BGR2RGB)
+        ).quantize(colors=GIF_PALETTE_SIZE_INT)
+    )
+    durations_list.append(VERDICT_DURATION_MS)
     output_path_obj = ASSET_DIRECTORY_PATH / DEMO_GIF_FILENAME_STR
     pil_frames_list[0].save(
         output_path_obj,
